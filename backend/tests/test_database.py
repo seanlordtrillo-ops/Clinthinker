@@ -9,6 +9,46 @@ from app import database
 
 
 class DatabaseMigrationTests(unittest.TestCase):
+    def test_adds_nullable_is_exam_to_legacy_uploads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            uploads = storage / "uploads"
+            uploads.mkdir()
+            db_path = storage / "assistant.sqlite3"
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.execute(
+                    "CREATE TABLE uploads (id TEXT PRIMARY KEY, name TEXT NOT NULL, "
+                    "stored_path TEXT NOT NULL, bytes INTEGER NOT NULL, text_chars INTEGER NOT NULL, "
+                    "uploaded_at TEXT NOT NULL DEFAULT (datetime('now')))"
+                )
+                connection.execute(
+                    "INSERT INTO uploads(id, name, stored_path, bytes, text_chars) "
+                    "VALUES('existing', 'notes.txt', 'notes.txt', 10, 10)"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with (
+                patch.object(database, "STORAGE", storage),
+                patch.object(database, "UPLOADS", uploads),
+                patch.object(database, "DB_PATH", db_path),
+            ):
+                database.initialize()
+                database.initialize()
+                with database.connect() as db:
+                    columns = [
+                        row["name"]
+                        for row in db.execute("PRAGMA table_info(uploads)").fetchall()
+                    ]
+                    existing = db.execute(
+                        "SELECT is_exam FROM uploads WHERE id='existing'"
+                    ).fetchone()
+
+        self.assertEqual(columns.count("is_exam"), 1)
+        self.assertIsNone(existing["is_exam"])
+
     def test_model_calibration_table_initialization_is_idempotent(self):
         with tempfile.TemporaryDirectory() as temporary:
             storage = Path(temporary)

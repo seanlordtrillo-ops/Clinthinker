@@ -7,7 +7,7 @@ import {
 import Sidebar from "./components/Sidebar.jsx";
 import { api } from "./lib/api.js";
 
-const initialSettings = { language: "English", appearance: "orange" };
+const initialSettings = { appearance: "orange" };
 const initialQuestionForm = {
   topic: "All Topics",
   question_type: "Multiple Choice",
@@ -54,6 +54,7 @@ export default function App() {
   const [savedAnswerSessions, setSavedAnswerSessions] = useState([]);
   const [savedAnswersLoadedSessions, setSavedAnswersLoadedSessions] = useState([]);
   const [questionResult, setQuestionResult] = useState(null);
+  const [questionSetUnavailable, setQuestionSetUnavailable] = useState(false);
   const [questionPreferences, setQuestionPreferences] = useState({
     ratings_recorded: 0,
     positive_ratings: 0,
@@ -61,6 +62,7 @@ export default function App() {
     learned_preferences: []
   });
   const [questionAnswers, setQuestionAnswers] = useState({});
+  const [questionExplanations, setQuestionExplanations] = useState({});
   const [questionBusy, setQuestionBusy] = useState(false);
   const [questionsSaved, setQuestionsSaved] = useState(false);
   const [questionForm, setQuestionForm] = useState({
@@ -101,7 +103,6 @@ export default function App() {
         if (!active) return;
         setAppVersion(health.version);
         setSettings({
-          language: savedSettings.language || initialSettings.language,
           appearance: savedSettings.appearance || initialSettings.appearance
         });
         syncSavedUploads(savedUploads);
@@ -278,6 +279,7 @@ export default function App() {
         setLessonUploads(remainingLessons);
         setQuestionResult(null);
         setQuestionAnswers({});
+        setQuestionExplanations({});
         setQuestionsSaved(false);
         if (remainingLessons.length) {
           await generateQuestions({ lessons: remainingLessons });
@@ -298,6 +300,18 @@ export default function App() {
       setNotice("File deleted from local storage.");
     } catch (deleteError) {
       setError(`Could not delete ${upload.name}: ${deleteError.message}`);
+    }
+  };
+
+  const setUploadExam = async (upload, isExam) => {
+    setError("");
+    try {
+      const updated = await api.setUploadExam(upload.id, isExam);
+      setUploads((current) => current.map((item) => item.id === upload.id
+        ? { ...item, is_exam: updated.is_exam }
+        : item));
+    } catch (updateError) {
+      setError(`Could not update ${upload.name}: ${updateError.message}`);
     }
   };
 
@@ -363,12 +377,15 @@ export default function App() {
     setError("");
     setNotice("");
     try {
-      const dataset = await api.importTrainingCsv(file, trainingDatasetName.trim());
+      const requestedName = trainingDatasetName.trim();
+      const dataset = await api.importTrainingCsv(file, requestedName);
       await refreshTrainingDatasets();
       setSelectedDatasetId(dataset.id);
       setQuestionDatasetId(dataset.id);
       setTrainingDatasetName("");
-      setNotice(`Imported ${dataset.example_count} labeled rows across ${dataset.topic_count} topics.`);
+      setNotice(requestedName
+        ? `Imported ${dataset.example_count} labeled rows across ${dataset.topic_count} topics.`
+        : `Dataset "${dataset.name}" created from the file name.`);
     } catch (importError) {
       setError(`CSV dataset could not be imported: ${importError.message}`);
     } finally {
@@ -377,6 +394,11 @@ export default function App() {
   };
 
   const createDocumentTrainingDataset = async () => {
+    if (!trainingDatasetName.trim()) {
+      setError("Enter a name for this dataset.");
+      setNotice("");
+      return;
+    }
     const examples = selectedTrainingUploads.map((uploadId) => ({
       upload_id: uploadId,
       topic: (trainingLabels[uploadId] || "").trim()
@@ -495,7 +517,6 @@ export default function App() {
     setError("");
     try {
       const saved = await api.saveSettings({
-        language: settings.language,
         appearance: settings.appearance,
         question_generation: {
           training_dataset_id: questionDatasetId,
@@ -514,7 +535,6 @@ export default function App() {
         }
       });
       setSettings({
-        language: saved.language || initialSettings.language,
         appearance: saved.appearance || initialSettings.appearance
       });
       setNotice("Preferences and question-generation settings saved locally.");
@@ -541,6 +561,7 @@ export default function App() {
       return null;
     }
     setQuestionBusy(true);
+    setQuestionSetUnavailable(false);
     if (useLesson) {
       setLessonProgress({
         phase: "generating",
@@ -548,6 +569,7 @@ export default function App() {
       });
     }
     setQuestionAnswers({});
+    setQuestionExplanations({});
     setQuestionsSaved(false);
     try {
       const result = await api.generateQuestions({
@@ -632,6 +654,7 @@ export default function App() {
     setNotice("");
     setQuestionResult(null);
     setQuestionAnswers({});
+    setQuestionExplanations({});
     setQuestionsSaved(false);
     let nextLessons = [...lessonUploads, ...rejectedLessons];
     const uploadErrors = rejected.map((file) => `${file.name}: unsupported file type`);
@@ -718,6 +741,7 @@ export default function App() {
     setLessonUploads(remainingLessons);
     setQuestionResult(null);
     setQuestionAnswers({});
+    setQuestionExplanations({});
     setQuestionsSaved(false);
     if (remainingLessons.some((lesson) => lesson.status === "Ready")) {
       void generateQuestions({ lessons: remainingLessons });
@@ -746,6 +770,7 @@ export default function App() {
       setNotice(`${result.saved_count} question${result.saved_count === 1 ? "" : "s"} saved on this device.`);
     } catch (saveError) {
       setError(`Questions could not be saved: ${saveError.message}`);
+      if (saveError.status === 410) setQuestionSetUnavailable(true);
     } finally {
       setQuestionBusy(false);
     }
@@ -755,6 +780,7 @@ export default function App() {
     if (!questionResult?.questions?.length) return;
     if (Object.keys(questionAnswers).length) {
       setQuestionAnswers({});
+      setQuestionExplanations({});
       return;
     }
     setQuestionBusy(true);
@@ -765,8 +791,10 @@ export default function App() {
         questionResult.questions.map((item) => item.id)
       );
       setQuestionAnswers(result.answers);
+      setQuestionExplanations(result.explanations || {});
     } catch (answerError) {
       setError(`Answer key could not be loaded: ${answerError.message}`);
+      if (answerError.status === 410) setQuestionSetUnavailable(true);
     } finally {
       setQuestionBusy(false);
     }
@@ -905,7 +933,11 @@ export default function App() {
         item.source_reference
       ])
     ];
-    const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
+    const csv = "\ufeff" + rows.map((row) => row.map((value) => {
+      const text = String(value);
+      const safeText = /^[=+\-@]/.test(text) ? `'${text}` : text;
+      return `"${safeText.replaceAll('"', '""')}"`;
+    }).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -957,6 +989,7 @@ export default function App() {
           removeQueued={(id) => setQueuedFiles((current) => current.filter((item) => item.id !== id))}
           includeSavedFile={includeSavedFile}
           removeUpload={removeUpload}
+          setUploadExam={setUploadExam}
           analyze={analyze}
           busy={busy}
           progress={progress}
@@ -1014,8 +1047,10 @@ export default function App() {
           form={questionForm}
           onOpenSettings={() => setPage("Settings")}
           result={questionResult}
+          questionSetUnavailable={questionSetUnavailable}
           preferences={questionPreferences}
           answers={questionAnswers}
+          explanations={questionExplanations}
           busy={questionBusy}
           saved={questionsSaved}
           onGenerate={generateQuestions}
@@ -1040,12 +1075,14 @@ export default function App() {
             setQuestionForm((current) => ({ ...current, topic: "All Topics" }));
             setQuestionResult(null);
             setQuestionAnswers({});
+            setQuestionExplanations({});
           }}
           selectedUploadIds={questionUploadIds}
           setSelectedUploadIds={(update) => {
             setQuestionUploadIds(update);
             setQuestionResult(null);
             setQuestionAnswers({});
+            setQuestionExplanations({});
           }}
           topics={questionTopics}
           questionForm={questionForm}
@@ -1053,6 +1090,7 @@ export default function App() {
             setQuestionForm(update);
             setQuestionResult(null);
             setQuestionAnswers({});
+            setQuestionExplanations({});
           }}
           saveSettings={saveSettings}
           busy={settingsBusy}
@@ -1104,7 +1142,7 @@ function PracticeQuestionsPage({
   datasets, uploads, selectedDatasetId, selectedUploadIds, lessonUploads,
   lessonUploadBusy, lessonProgress, useExamStyle, onChangeExamStyle, lessonUploadInput,
   onUploadLessons, onRemoveLesson, form, onOpenSettings,
-  result, preferences, answers, busy, saved, onGenerate, onSave, onRevealAnswers,
+  result, preferences, answers, explanations, busy, saved, questionSetUnavailable, onGenerate, onSave, onRevealAnswers,
   onExportCsv, onExportPdf, onBack, error, notice, onRateQuestion, onResetPreferences
 }) {
   const [lessonDropActive, setLessonDropActive] = useState(false);
@@ -1128,6 +1166,26 @@ function PracticeQuestionsPage({
     return right.likelihood_score - left.likelihood_score
       || left.lesson_order - right.lesson_order;
   }) : [];
+  const examQuestions = result?.likely_topics ? sortedQuestions : (result?.questions || []);
+  let nextExamNumber = 1;
+  const questionParts = ["Multiple Choice", "True or False", "Identification"]
+    .map((type) => ({
+      type,
+      questions: examQuestions
+        .filter((item) => item.question_type === type)
+        .map((item) => ({ ...item, exam_number: nextExamNumber++ }))
+    }))
+    .filter((part) => part.questions.length > 0);
+  const numberedExamQuestions = questionParts.flatMap((part) => part.questions);
+  const printSubject = result?.lesson_name || selectedDatasetName;
+  const printFooter = `${printSubject} | ${examQuestions.length} point${examQuestions.length === 1 ? "" : "s"}`;
+  const printFooterCss = printFooter
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("<", "\\3C ")
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .replaceAll("\f", " ");
   const rejectionLabels = {
     already_a_question: "Already phrased as a question",
     below_topic_relevance: "Below the 45% topic-relevance threshold",
@@ -1155,7 +1213,7 @@ function PracticeQuestionsPage({
 
     <div className="question-priority-notice">
       <ShieldCheck size={17} />
-      <span><strong>Likelihood is an estimate from your materials, not a guarantee of actual exam content.</strong> Past-exam signals are used only when matching exam PDFs are available locally.</span>
+      <span><strong>Likelihood is an estimate from your materials, not a guarantee of actual exam content.</strong> Past-exam signals are used only when enabled and matching exam PDFs are available locally.</span>
     </div>
     <div className="question-overview-card">
       <div className="section-heading">
@@ -1169,8 +1227,8 @@ function PracticeQuestionsPage({
         </span>
       </div>}
       <div className="question-overview-sources question-style-reference">
-        <strong>Style reference: {useExamStyle ? `${examFiles.length} exam file${examFiles.length === 1 ? "" : "s"}` : "Off"}</strong>
-        <span>Exam files can provide question-stem patterns only; they never provide lesson facts or answer choices.</span>
+        <strong>Past-exam evidence: {useExamStyle ? `${examFiles.length} exam file${examFiles.length === 1 ? "" : "s"}` : "Off"}</strong>
+        <span>Past exams help rank likely topics. Question stems and choices are newly written from selected lesson material.</span>
       </div>
       <div className="question-overview-grid">
         <div><span>Training dataset</span><strong>{selectedDatasetName}</strong></div>
@@ -1241,7 +1299,7 @@ function PracticeQuestionsPage({
         </div>}
         <label className="lesson-style-toggle">
           <input type="checkbox" checked={useExamStyle} onChange={(event) => onChangeExamStyle(event.target.checked)} disabled={lessonUploadBusy || busy} />
-          <span><strong>Use exam files for style</strong><small>Reuses common stem patterns and frequency; this is pattern reuse, not generative learning.</small></span>
+          <span><strong>Use past exams for topic ranking</strong><small>Past exams inform likely-topic estimates, but question stems and answers come from your lesson material.</small></span>
         </label>
         <small className="lesson-upload-hint">PDF, DOCX, TXT · maximum 20 MB · scanned PDFs need local Tesseract OCR</small>
       </div>
@@ -1273,7 +1331,7 @@ function PracticeQuestionsPage({
             : " · no exam passages met the labeling confidence threshold"}.
         </p>}
         {result.style_reference_enabled && <p className="classifier-training-note">
-          Reused {result.style_template_count} generic question-stem pattern(s) from {result.style_reference_files} exam file(s); no exam facts or answers were copied.
+          Detected {result.question_pattern_count} wording pattern(s) across {result.style_reference_files} exam file(s). These are not copied; questions are written from lesson concepts.
         </p>}
         {result.skipped_exam_files?.length > 0 && <p className="lesson-exam-note">
           Past-exam evidence could not be extracted from: {result.skipped_exam_files.join(", ")}
@@ -1310,14 +1368,17 @@ function PracticeQuestionsPage({
           <span>{rejectionLabels[reason] || reason.replaceAll("_", " ")}</span><strong>{count}</strong>
         </li>)}</ul>
       </details>}
-      <div className="question-actions no-print">
+      <div className="question-actions">
         <button className="button-outline" disabled={busy || !result.questions.length} onClick={onGenerate}><RotateCcw size={14} /> Generate Again</button>
-        <button className="button-outline" disabled={busy || saved || !result.questions.length} onClick={onSave}><Save size={14} /> {saved ? "Saved Locally" : "Save Questions"}</button>
+        <button className="button-outline" disabled={busy || saved || questionSetUnavailable || !result.questions.length} onClick={onSave}><Save size={14} /> {saved ? "Saved Locally" : "Save Questions"}</button>
         <button className="button-outline" disabled={!result.questions.length} onClick={onExportCsv}><Download size={14} /> Export CSV</button>
         <button className="button-outline" disabled={!result.questions.length} onClick={onExportPdf}><Printer size={14} /> Export PDF</button>
-        <button className="button-outline" disabled={busy || !result.questions.length} onClick={onRevealAnswers}><Eye size={14} /> {Object.keys(answers).length ? "Hide Answers" : "Show Answers"}</button>
+        <button className="button-outline" disabled={busy || !result.questions.length || (questionSetUnavailable && !Object.keys(answers).length)} onClick={onRevealAnswers}><Eye size={14} /> {Object.keys(answers).length ? "Hide Answers" : "Show Answers"}</button>
       </div>
-      {result.likely_topics && <label className="question-sort-control no-print">
+      <p className="exam-export-note no-print">
+        The PDF keeps answers off the exam pages. Show Answers first to append a separate answer key and explanations.
+      </p>
+      {result.likely_topics && <label className="question-sort-control">
         Sort questions
         <select value={questionSort} onChange={(event) => setQuestionSort(event.target.value)}>
           <option value="likelihood">Likelihood</option>
@@ -1325,30 +1386,89 @@ function PracticeQuestionsPage({
           <option value="lesson">Lesson order</option>
         </select>
       </label>}
-      <div className="question-cards">
-        {(result.likely_topics ? sortedQuestions : result.questions).map((item, index) => <article className="practice-question-card" key={item.id}>
-          <div className="practice-question-meta">
-            <span>QUESTION {String(index + 1).padStart(2, "0")}</span>
-            <span>{item.topic}</span>
-            <span>{item.difficulty}</span>
-            {item.likelihood && <span className={`likelihood-chip likelihood-${item.likelihood.toLowerCase()}`}>{item.likelihood} likelihood</span>}
-            {!item.likelihood && <><span>PRIORITY {Math.round(item.priority_score * 100)}%</span><span>RELEVANCE {Math.round(item.confidence_score * 100)}%</span></>}
+      <div className="exam-screen">
+        {questionParts.map((part) => <section className="exam-part" key={part.type}>
+          <div className="exam-question-list">
+            {part.questions.map((item) => <article className="exam-question" key={item.id}>
+              <p className="exam-question-stem"><strong>{item.exam_number}.</strong> {item.question_text}</p>
+              {item.choices?.length > 0 && <ol className="exam-choices">
+                {item.choices.map((choice, choiceIndex) => <li key={`${item.id}-${choiceIndex}`}>
+                  <span>{String.fromCharCode(65 + choiceIndex)}.</span>{choice}
+                </li>)}
+              </ol>}
+              {item.question_type === "True or False" && <div className="exam-response-line">True / False: ____________________</div>}
+              {item.question_type === "Identification" && <div className="exam-response-line" />}
+              <details className="question-instructor-details no-print">
+                <summary>Question details and feedback</summary>
+                <div className="practice-question-meta">
+                  <span>{item.topic}</span>
+                  <span>{item.difficulty}</span>
+                  {item.likelihood && <span className={`likelihood-chip likelihood-${item.likelihood.toLowerCase()}`}>{item.likelihood} likelihood</span>}
+                  {!item.likelihood && <><span>PRIORITY {Math.round(item.priority_score * 100)}%</span><span>RELEVANCE {Math.round(item.confidence_score * 100)}%</span></>}
+                </div>
+                {item.likelihood_why && <p className="question-likelihood-why"><strong>Why:</strong> {item.likelihood_why.join(" · ")}</p>}
+                <QuestionFeedbackButtons
+                  item={item}
+                  onRate={(rating) => onRateQuestion(item, rating, result.generation_id)}
+                />
+                <details className="practice-source">
+                  <summary>View source reference</summary>
+                  <p>{item.source_reference}</p>
+                </details>
+              </details>
+            </article>)}
           </div>
-          <h3>{item.question_text}</h3>
-          {item.choices.length > 0 && <ol className="practice-choices">
-            {item.choices.map((choice, choiceIndex) => <li key={`${item.id}-${choiceIndex}`}><span>{String.fromCharCode(65 + choiceIndex)}.</span>{choice}</li>)}
-          </ol>}
-          {answers[item.id] && <div className="practice-answer"><strong>Answer</strong><span>{answers[item.id]}</span></div>}
-          {item.likelihood_why && <p className="question-likelihood-why"><strong>Why:</strong> {item.likelihood_why.join(" · ")}</p>}
-          <QuestionFeedbackButtons
-            item={item}
-            onRate={(rating) => onRateQuestion(item, rating, result.generation_id)}
-          />
-          <details className="practice-source">
-            <summary>View source reference</summary>
-            <p>{item.source_reference}</p>
-          </details>
-        </article>)}
+        </section>)}
+      </div>
+      {Object.keys(answers).length > 0 && <details className="exam-answer-key no-print">
+        <summary>Answer key and explanations</summary>
+        <ol>{numberedExamQuestions.map((item) => <li key={item.id}>
+          <strong>{item.exam_number}.</strong> {answers[item.id]}
+          {explanations[item.id] && <p>{explanations[item.id]}</p>}
+        </li>)}</ol>
+      </details>}
+      <div className="exam-print-document">
+        <style>{`@media print {
+          @page {
+            margin: 18mm 15mm 20mm;
+            @bottom-left { content: "${printFooterCss}"; font-size: 8pt; color: #333; }
+            @bottom-right { content: "Page " counter(page); font-size: 8pt; color: #333; }
+          }
+        }`}</style>
+        <header className="exam-print-header">
+          <h1>{printSubject}</h1>
+          <p>Practice Examination</p>
+          <div><span>Name: ____________________________________</span><span>Date: __________________</span></div>
+        </header>
+        {questionParts.map((part) => <section className="exam-part" key={`print-${part.type}`}>
+          <div className="exam-question-list">
+            {part.questions.map((item) => <article className="exam-question" key={`print-${item.id}`}>
+              <p className="exam-question-stem"><strong>{item.exam_number}.</strong> {item.question_text}</p>
+              {item.choices?.length > 0 && <ol className="exam-choices">
+                {item.choices.map((choice, choiceIndex) => <li key={`${item.id}-${choiceIndex}`}>
+                  <span>{String.fromCharCode(65 + choiceIndex)}.</span>{choice}
+                </li>)}
+              </ol>}
+              {item.question_type === "True or False" && <div className="exam-response-line">True / False: ____________________</div>}
+              {item.question_type === "Identification" && <div className="exam-response-line" />}
+            </article>)}
+          </div>
+        </section>)}
+        {Object.keys(answers).length > 0 && <section className="exam-print-answer-key">
+          <h2>ANSWER KEY AND EXPLANATIONS</h2>
+          <ol>{numberedExamQuestions.map((item) => {
+            const answerIndex = item.choices?.findIndex(
+              (choice) => String(choice).toLowerCase() === String(answers[item.id] || "").toLowerCase()
+            );
+            const answerLabel = answerIndex >= 0
+              ? `${String.fromCharCode(65 + answerIndex)}. ${answers[item.id]}`
+              : answers[item.id];
+            return <li key={`key-${item.id}`}>
+              <strong>{item.exam_number}. {answerLabel}</strong>
+              {explanations[item.id] && <p>{explanations[item.id]}</p>}
+            </li>;
+          })}</ol>
+        </section>}
       </div>
       {!result.lesson_analysis && result.topic_priorities?.length > 0 && <details className="question-priority-breakdown">
         <summary>Transparent topic priority breakdown</summary>
@@ -1509,7 +1629,7 @@ function QuestionPreferenceNotice({ preferences, onReset }) {
 }
 
 function QuestionFeedbackButtons({ item, onRate }) {
-  return <div className="question-feedback-actions no-print" aria-label="Rate this question">
+  return <div className="question-feedback-actions" aria-label="Rate this question">
     <span>Was this a good question?</span>
     <button
       className={`button-outline ${item.feedback_rating === 1 ? "question-feedback-selected" : ""}`}
@@ -1532,7 +1652,7 @@ function QuestionFeedbackButtons({ item, onRate }) {
 
 function UploadPage({
   uploads, datasets, selectedDatasetId, setSelectedDatasetId, trainingBusy, queuedFiles,
-  addFiles, fileInput, removeQueued, includeSavedFile, removeUpload, analyze,
+  addFiles, fileInput, removeQueued, includeSavedFile, removeUpload, setUploadExam, analyze,
   busy, progress, latest, error, notice, dragging
 }) {
   return (
@@ -1586,7 +1706,20 @@ function UploadPage({
           {uploads.length ? <div className="saved-file-list">
             {uploads.map((upload) => <div className="saved-file" key={upload.id}>
               <span className="saved-file-icon"><FileText size={16} /></span>
-              <span className="saved-file-copy"><strong title={upload.name}>{upload.name}</strong><small>{formatBytes(upload.bytes)} · {formatDate(upload.uploaded_at)}</small></span>
+              <span className="saved-file-copy">
+                <strong title={upload.name}>{upload.name}</strong>
+                <small>{formatBytes(upload.bytes)} · {formatDate(upload.uploaded_at)}</small>
+                {upload.is_exam === null && upload.exam_auto && <small className="saved-file-exam-auto">Auto-detected</small>}
+              </span>
+              <label className="saved-file-exam-toggle">
+                <input
+                  type="checkbox"
+                  checked={upload.is_exam ?? upload.exam_auto}
+                  onChange={(event) => setUploadExam(upload, event.target.checked)}
+                  aria-label={`Past exam: ${upload.name}`}
+                />
+                <span>Past exam</span>
+              </label>
               <button className="icon-button saved-use" title={`Use ${upload.name} in analysis`} aria-label={`Use ${upload.name} in analysis`} onClick={() => includeSavedFile(upload)}><RotateCcw size={15} /></button>
               <button className="icon-button saved-delete" title={`Delete ${upload.name}`} aria-label={`Delete ${upload.name}`} onClick={() => removeUpload(upload)}><Trash2 size={15} /></button>
             </div>)}
@@ -1661,6 +1794,9 @@ function TrainingDataPage({
       setEvaluationBusy(false);
     }
   };
+  const calibrationNotice = evaluation?.calibration_saved
+    ? `This evaluation updated the abstain thresholds used for predictions with this dataset: confidence ${(evaluation.decision_policy.confidence_threshold * 100).toFixed(1)}%, margin ${(evaluation.decision_policy.min_margin * 100).toFixed(1)}%.`
+    : "";
 
   return <section className="training-page">
     <div className="training-page-heading">
@@ -1681,7 +1817,10 @@ function TrainingDataPage({
           {evaluationBusy ? "Evaluating…" : "Evaluate selected dataset"}
         </button>
       </div>
-      <p className="evaluation-disclaimer">Metrics summarize predictions on held-out folds of the labeled dataset. They do not measure performance on future exams.</p>
+      <p className="evaluation-disclaimer">
+        Metrics summarize predictions on held-out folds of the labeled dataset. They do not measure performance on future exams.
+        {calibrationNotice && <span>{calibrationNotice}</span>}
+      </p>
       {evaluationError && <div className="app-message app-message-error"><AlertCircle size={16} />{evaluationError}</div>}
       {evaluation && <div className="evaluation-report">
         <div className="evaluation-report-meta">
@@ -1708,6 +1847,7 @@ function TrainingDataPage({
             </tr>)}</tbody>
           </table>
         </div>
+        <p className="evaluation-calibration-note">{calibrationNotice}</p>
       </div>}
     </div>
     <div className="training-data-panel">
@@ -1718,7 +1858,7 @@ function TrainingDataPage({
     <div className="training-data-grid">
       <div className="training-builder">
         <label className="training-name-field"><span>Dataset name</span>
-          <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} maxLength={100} placeholder="e.g. Biology midterm" />
+          <input value={datasetName} onChange={(event) => setDatasetName(event.target.value)} maxLength={100} placeholder="Optional for CSV (uses the file name). Required for labeled documents." />
         </label>
         <div className="training-actions">
           <button className="button-outline" onClick={() => csvInput.current?.click()} disabled={busy}>
@@ -1759,7 +1899,7 @@ function TrainingDataPage({
               </div>
             </div>;
           })}
-          <button className="button-dark create-dataset-button" onClick={onCreateDocuments} disabled={busy || selectedUploads.length < 2 || !datasetName.trim()}>
+          <button className="button-dark create-dataset-button" onClick={onCreateDocuments} disabled={busy || selectedUploads.length < 2}>
             <Database size={14} /> Create from labeled documents
           </button>
         </div> : <div className="training-empty">Add at least two documents and label each with its topic to train from documents.</div>}
@@ -1813,9 +1953,6 @@ function SettingsPage({
           <option value="pink">Clinthinker White &amp; Pink</option>
           <option value="regal">Alamo&apos;s Regal Nature (Gold &amp; Purple)</option>
         </select>
-      </label>
-      <label><span><strong>Language</strong><small>Language used by the interface.</small></span>
-        <select value={settings.language} onChange={(event) => setSettings((current) => ({ ...current, language: event.target.value }))}><option>English</option></select>
       </label>
       <div className="app-version-row">
         <span><strong>Version {appVersion || "..."}</strong></span>

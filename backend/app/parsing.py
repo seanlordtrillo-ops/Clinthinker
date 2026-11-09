@@ -60,7 +60,12 @@ def extract_text(filename: str, content: bytes) -> str:
                 index for index, page_text in enumerate(page_texts)
                 if len(page_text.strip()) < OCR_MIN_PAGE_TEXT
             ]
-            if len(sparse_pages) > MAX_OCR_PAGES:
+            pages_need_ocr = bool(page_texts) and (
+                len(sparse_pages) == len(page_texts)
+                or len(sparse_pages) > len(page_texts) / 2
+            )
+            ocr_pages = sparse_pages if pages_need_ocr else []
+            if len(ocr_pages) > MAX_OCR_PAGES:
                 raise HTTPException(
                     status_code=413,
                     detail=(
@@ -68,14 +73,14 @@ def extract_text(filename: str, content: bytes) -> str:
                         "Split the document into smaller files and try again."
                     ),
                 )
-            if sparse_pages:
+            if ocr_pages:
                 import pypdfium2
                 import pytesseract
 
                 document = pypdfium2.PdfDocument(content)
                 try:
                     ocr = _get_ocr_engine(pytesseract)
-                    for index in sparse_pages:
+                    for index in ocr_pages:
                         image = document[index].render(scale=2).to_pil()
                         page_texts[index] = ocr.image_to_string(image, lang="eng")
                 finally:

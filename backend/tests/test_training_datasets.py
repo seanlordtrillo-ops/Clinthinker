@@ -83,6 +83,39 @@ class TrainingDatasetTests(unittest.TestCase):
         self.assertIn("'topic' and 'text'", error.exception.detail)
         self.assertEqual(len(main.list_training_datasets()), 1)
 
+    def test_csv_whitespace_name_falls_back_to_file_name(self):
+        self.with_isolated_storage()
+        uploaded = UploadFile(
+            filename="week3-topics.csv",
+            file=io.BytesIO(
+                b"topic,text\n"
+                b"Plants,photosynthesis chlorophyll plant energy\n"
+                b"Plants,plant leaves sunlight carbon dioxide\n"
+                b"Stars,orbit telescope star galaxy\n"
+                b"Stars,planet moon nebula telescope\n"
+            ),
+        )
+
+        dataset = asyncio.run(main.import_training_csv(uploaded, name="   \t "))
+
+        self.assertEqual(dataset["name"], "week3-topics")
+
+    def test_document_dataset_rejects_whitespace_name(self):
+        self.with_isolated_storage()
+        with self.assertRaises(HTTPException) as error:
+            main.create_document_dataset(
+                main.DocumentDatasetRequest(
+                    name="   ",
+                    examples=[
+                        {"upload_id": "one", "topic": "Plants"},
+                        {"upload_id": "two", "topic": "Stars"},
+                    ],
+                )
+            )
+
+        self.assertEqual(error.exception.status_code, 422)
+        self.assertEqual(error.exception.detail, "Enter a name for this dataset.")
+
     def test_api_upload_select_and_prediction_round_trip(self):
         self.with_isolated_storage()
         content = (
@@ -111,13 +144,29 @@ class TrainingDatasetTests(unittest.TestCase):
             self.assertEqual(evaluation.json()["training_dataset_name"], "custom")
             self.assertEqual(evaluation.json()["examples_evaluated"], 4)
             self.assertEqual(len(evaluation.json()["threshold_sweep"]), 66)
+            self.assertTrue(evaluation.json()["calibration_saved"])
+            decision_policy = evaluation.json()["decision_policy"]
+            self.assertEqual(
+                set(decision_policy),
+                {"confidence_threshold", "min_margin", "disagreement_abstain"},
+            )
             with database.connect() as db:
                 calibration = db.execute(
-                    "SELECT dataset_hash, confidence_threshold "
+                    "SELECT dataset_hash, confidence_threshold, min_margin, "
+                    "disagreement_abstain "
                     "FROM model_calibration WHERE dataset_id=?",
                     (dataset["id"],),
                 ).fetchone()
             self.assertIsNotNone(calibration)
+            self.assertEqual(
+                decision_policy["confidence_threshold"],
+                calibration["confidence_threshold"],
+            )
+            self.assertEqual(decision_policy["min_margin"], calibration["min_margin"])
+            self.assertEqual(
+                decision_policy["disagreement_abstain"],
+                bool(calibration["disagreement_abstain"]),
+            )
 
             response = client.post(
                 "/api/predict/stream",

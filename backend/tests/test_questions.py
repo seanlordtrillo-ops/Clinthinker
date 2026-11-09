@@ -9,9 +9,15 @@ from fastapi.testclient import TestClient
 from app import database, main
 from app.questions import (
     _definition,
+    _definition_category,
+    _distractor_matches_stem_category,
+    _correct_indefinite_articles,
     _negate_statement,
+    _normalize_choice,
+    _question_from_definition,
     _similar_definition_term,
-    extract_exam_stem_templates,
+    _statement_from_definition,
+    extract_exam_question_patterns,
     generate_questions,
     estimate_difficulty,
     is_duplicate,
@@ -36,6 +42,19 @@ MATERIAL = (
     "Routing is the process of selecting a path for data packets across interconnected networks. "
     "Network protocol is a formal set of rules that govern communication between devices. "
     "Packet switching is a method that sends data in small units over a network."
+)
+INSTRUMENT_LESSON = (
+    "Oscilloscope is an instrument used to display electrical signals as waveforms. "
+    "Multimeter is an instrument used to measure voltage, current, and resistance. "
+    "Voltmeter is an instrument used to measure electrical potential difference. "
+    "Ammeter is an instrument used to measure electric current. "
+    "Ohmmeter is an instrument used to measure electrical resistance. "
+    "Barometer is an instrument used to measure atmospheric pressure. "
+    "Thermometer is an instrument used to measure temperature. "
+    "Tachometer is an instrument used to measure rotational speed. "
+    "Anemometer is an instrument used to measure wind speed. "
+    "Manometer is an instrument used to measure fluid pressure. "
+    "DMM is an instrument used to measure voltage, current, and resistance."
 )
 
 
@@ -213,15 +232,41 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             0.40,
         )
 
-    def test_multiple_choice_generation_is_source_supported_and_answer_hidden_in_display_contract(self):
-        result = self.generate()
+    def test_multiple_choice_generation_uses_same_kind_options_and_normalizes_case(self):
+        result = self.generate(
+            sources=[{
+                "id": "instruments",
+                "name": "Instrument lesson",
+                "text": INSTRUMENT_LESSON,
+                "kind": "lesson",
+            }],
+            lesson_mode=True,
+        )
         self.assertGreater(len(result["questions"]), 0)
-        item = result["questions"][0]
-        self.assertEqual(len(item["choices"]), 4)
-        self.assertEqual(len({choice.casefold() for choice in item["choices"]}), 4)
-        self.assertTrue(item["correct_answer"] in item["choices"])
-        self.assertIn(item["support_excerpt"], item["source_content"])
-        self.assertTrue(validate_candidate(item, "Multiple Choice"))
+        self.assertGreaterEqual(len(result["questions"]), 2)
+        definitions = {
+            term.casefold(): explanation
+            for sentence in INSTRUMENT_LESSON.split(". ")
+            if (definition := _definition(sentence.rstrip(".")))
+            for term, explanation in [definition]
+        }
+        used_distractors = []
+        for item in result["questions"]:
+            self.assertEqual(len(item["choices"]), 4)
+            self.assertEqual(len({choice.casefold() for choice in item["choices"]}), 4)
+            self.assertIn(item["correct_answer"], item["choices"])
+            self.assertIn(item["support_excerpt"], item["source_content"])
+            self.assertTrue(validate_candidate(item, "Multiple Choice"))
+            self.assertEqual(
+                {_definition_category(definitions[choice.casefold()]) for choice in item["choices"]},
+                {"instrument"},
+            )
+            for choice in item["choices"]:
+                if choice != item["correct_answer"]:
+                    used_distractors.append(choice.casefold())
+                if choice != "DMM":
+                    self.assertEqual(choice, choice[:1].upper() + choice[1:].lower())
+        self.assertEqual(len(used_distractors), len(set(used_distractors)))
 
     def test_true_false_and_identification_types_are_valid(self):
         true_false = self.generate("True or False")
@@ -232,6 +277,11 @@ class PracticeQuestionUnitTests(unittest.TestCase):
         self.assertTrue(
             all(validate_candidate(item, "True or False") for item in true_false["questions"])
         )
+        self.assertTrue(all(
+            not item["question_text"].startswith("True or False:")
+            and item["question_text"] != item["cited_passage"]
+            for item in true_false["questions"]
+        ))
         false_question = next(
             item for item in true_false["questions"] if item["correct_answer"] == "False"
         )
@@ -255,6 +305,254 @@ class PracticeQuestionUnitTests(unittest.TestCase):
         self.assertEqual(identification["questions"][0]["choices"], [])
         self.assertTrue(validate_candidate(identification["questions"][0], "Identification"))
 
+    def test_definition_questions_use_natural_concept_stems(self):
+        self.assertEqual(
+            _question_from_definition(
+                "Quantitative research",
+                "research that collects numerical data and analyzes it statistically",
+                0,
+            ),
+            "Which type of research collects numerical data and analyzes it statistically?",
+        )
+        self.assertEqual(
+            _question_from_definition(
+                "Independent variable",
+                "the variable manipulated by the researcher",
+                1,
+            ),
+            "Which variable does the researcher deliberately change?",
+        )
+        self.assertEqual(
+            _question_from_definition(
+                "Questionnaire",
+                "an instrument used to collect opinions from many respondents",
+                2,
+            ),
+            "Which instrument is used to collect opinions from many respondents?",
+        )
+        self.assertEqual(
+            _question_from_definition("Google App Engine", "an example of PaaS", 0),
+            "Which of the following is an example of PaaS?",
+        )
+        self.assertEqual(
+            _question_from_definition(
+                "Vendor lock-in",
+                "a situation in which a customer cannot easily move away from a provider "
+                "because of cost or technical dependence",
+                0,
+            ),
+            "Which term describes a situation in which a customer cannot easily move away "
+            "from a provider because of cost or technical dependence?",
+        )
+        self.assertEqual(
+            _question_from_definition(
+                "cloud provider",
+                "a company that owns large data centers and offers computing resources to customers",
+                0,
+            ),
+            "Which term refers to an organization that owns large data centers and offers "
+            "computing resources to customers?",
+        )
+        self.assertEqual(_definition_category("a company that owns large data centers"), "organization")
+        self.assertEqual(_definition_category("an example of cloud providers"), "organization")
+        self.assertEqual(_definition_category("an example of PaaS"), "example")
+        self.assertIsNone(
+            _question_from_definition(
+                "Unusual concept",
+                "a peculiar circumstance involving many unrelated outcomes",
+                0,
+            )
+        )
+
+    def test_articles_follow_the_sound_of_the_next_word_in_stems_and_statements(self):
+        question = _question_from_definition(
+            "Interface",
+            "a interface that connects a computer to a network",
+            0,
+        )
+        self.assertIn("an interface", question)
+        statement = _statement_from_definition(
+            "Interface",
+            "a interface that connects a computer to a network",
+        )
+        self.assertIn("an interface", statement.casefold())
+        self.assertEqual(_correct_indefinite_articles("an unit"), "a unit")
+        self.assertEqual(_correct_indefinite_articles("a router"), "a router")
+        self.assertEqual(
+            _question_from_definition(
+                "Output device",
+                "hardware that presents the results of processing to a user",
+                0,
+            ),
+            "Which term describes hardware that presents the results of processing to a user?",
+        )
+
+    def test_choice_normalization_preserves_acronyms_and_proper_nouns(self):
+        self.assertEqual(_normalize_choice("MEGABYTE"), "Megabyte")
+        self.assertEqual(_normalize_choice("CLOCK SPEED"), "Clock speed")
+        self.assertEqual(_normalize_choice("COMPUTER HARDWARE"), "Computer hardware")
+        self.assertEqual(_normalize_choice("HDMI"), "HDMI")
+        self.assertEqual(_normalize_choice("NVMe"), "NVMe")
+        self.assertEqual(_normalize_choice("FCAPS"), "FCAPS")
+        self.assertEqual(_normalize_choice("ISO"), "ISO")
+        self.assertEqual(_normalize_choice("Google Cloud"), "Google Cloud")
+
+    def test_definition_headwords_and_stem_category_reject_other_correct_answers(self):
+        self.assertEqual(_definition_category("a fast storage interface"), "storage_technology")
+        self.assertEqual(_definition_category("a unit of data"), "unit")
+        component_stem = (
+            "Which term describes a collection of physical components that make up a computer?"
+        )
+        self.assertTrue(_distractor_matches_stem_category(
+            component_stem,
+            "hardware that presents the results of processing to the user",
+        ))
+        self.assertTrue(_distractor_matches_stem_category(
+            component_stem,
+            "a small portable storage device that uses flash memory",
+        ))
+        self.assertTrue(_distractor_matches_stem_category(
+            "Which term describes an external device that connects to a computer?",
+            "hardware that presents the results of processing to the user",
+            "output device",
+        ))
+        self.assertTrue(_distractor_matches_stem_category(
+            "Which term describes hardware that presents processing results?",
+            "a device that presents the results of processing to the user",
+            "touchscreen",
+        ))
+        self.assertTrue(_distractor_matches_stem_category(
+            "Which term describes a framework that organizes network management?",
+            "a framework that organizes network management into functional areas",
+        ))
+        self.assertTrue(_distractor_matches_stem_category(
+            "Which of the following is an example of a cloud provider?",
+            "an example of a cloud provider",
+            "Microsoft Azure",
+        ))
+
+    def test_computer_hardware_question_is_skipped_when_options_are_also_components(self):
+        lesson = (
+            "Computer hardware is the collection of physical components that make up a computer system. "
+            "Output device is hardware that presents the results of processing to the user. "
+            "Flash drive is a small portable storage device that uses flash memory. "
+            "Processor is a hardware component that executes instructions and performs calculations. "
+            "Heat sink is a metal component that absorbs and spreads heat away from the CPU."
+        )
+        with patch(
+            "app.questions.predict_distributions",
+            side_effect=lambda texts, examples, **kwargs: [
+                [{"topic": "Networking", "confidence": 0.9}]
+                for _ in texts
+            ],
+        ):
+            result = self.generate(
+                sources=[{
+                    "id": "hardware-lesson",
+                    "name": "Computer hardware lesson",
+                    "text": lesson,
+                    "kind": "lesson",
+                }],
+                lesson_mode=True,
+                requested_count=5,
+                per_topic=5,
+            )
+
+        self.assertFalse(any(
+            item["correct_answer"].casefold() == "computer hardware"
+            for item in result["questions"]
+        ))
+        self.assertTrue(any(
+            rejection["reason"] == "not_enough_distinct_distractors"
+            for rejection in result["diagnostics"]["rejections"]
+        ), repr(result["diagnostics"]))
+        self.assertEqual(
+            result["diagnostics"]["no_valid_distractors"],
+            sum(
+                rejection["count"]
+                for rejection in result["diagnostics"]["rejections"]
+                if rejection["reason"] in {
+                    "not_enough_distinct_distractors",
+                    "no_valid_distractors",
+                }
+            ),
+        )
+
+    def test_identification_skips_definitions_without_a_natural_stem(self):
+        lesson = (
+            "Oddity is a peculiar circumstance involving many unrelated outcomes."
+        )
+        with patch(
+            "app.questions.predict_distributions",
+            side_effect=lambda texts, examples, **kwargs: [
+                [{"topic": "Networking", "confidence": 0.2}]
+                for _ in texts
+            ],
+        ):
+            result = self.generate(
+                question_type="Identification",
+                sources=[{
+                    "id": "lesson-oddity",
+                    "name": "Oddity lesson",
+                    "text": lesson,
+                    "kind": "lesson",
+                }],
+                lesson_mode=True,
+                requested_count=1,
+                per_topic=1,
+            )
+
+        self.assertEqual(result["questions"], [])
+        self.assertIn(
+            {"reason": "no_natural_stem", "count": 1},
+            result["diagnostics"]["rejections"],
+        )
+
+    def test_cloud_provider_definition_is_skipped_when_all_distractors_are_also_correct(self):
+        lesson = (
+            "cloud provider is a company that owns large data centers and offers computing resources to customers. "
+            "Amazon Web Services is an example of a cloud provider. "
+            "Microsoft Azure is an example of a cloud provider. "
+            "Google Cloud is an example of a cloud provider."
+        )
+        with patch(
+            "app.questions.predict_distributions",
+            side_effect=lambda texts, examples, **kwargs: [
+                [{"topic": "Cloud Computing", "confidence": 0.2}]
+                for _ in texts
+            ],
+        ):
+            result = self.generate(
+                sources=[{
+                    "id": "cloud-lesson",
+                    "name": "Cloud computing lesson",
+                    "text": lesson,
+                    "kind": "lesson",
+                }],
+                lesson_mode=True,
+                training_examples=[
+                    *TRAINING,
+                    ("COBIT governance framework controls organizational risk", "IT Governance"),
+                ],
+                requested_count=4,
+                per_topic=4,
+            )
+
+        self.assertFalse(any(
+            item["correct_answer"].casefold() == "cloud provider"
+            for item in result["questions"]
+        ))
+        self.assertFalse(any(
+            item["question_text"].casefold().startswith(
+                "which of the following is an example of"
+            )
+            for item in result["questions"]
+        ))
+        self.assertGreater(
+            result["diagnostics"]["rejections"][0]["count"],
+            0,
+        )
+
     def test_true_false_candidate_rejects_unsupported_or_mismatched_claims(self):
         item = self.generate("True or False")["questions"][0]
         self.assertFalse(
@@ -271,7 +569,15 @@ class PracticeQuestionUnitTests(unittest.TestCase):
         )
 
     def test_difficulty_and_source_validation_reject_invalid_candidates(self):
-        item = self.generate()["questions"][0]
+        item = self.generate(
+            sources=[{
+                "id": "instruments",
+                "name": "Instrument lesson",
+                "text": INSTRUMENT_LESSON,
+                "kind": "lesson",
+            }],
+            lesson_mode=True,
+        )["questions"][0]
         self.assertFalse(validate_candidate({**item, "difficulty": "Impossible"}, "Multiple Choice"))
         self.assertFalse(
             validate_candidate({**item, "source_content": "unrelated unsupported text"}, "Multiple Choice")
@@ -392,7 +698,7 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             )
             self.assertEqual(item["topic"], "Networking")
 
-    def test_lesson_mode_does_not_use_training_examples_as_distractors(self):
+    def test_lesson_multiple_choice_skips_without_same_lesson_distractors(self):
         lesson = (
             "Router is a device that forwards packets between networks using a routing table."
         )
@@ -409,19 +715,20 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             requested_count=1,
             per_topic=1,
         )
-        self.assertEqual(len(result["questions"]), 1)
-        self.assertEqual(result["questions"][0]["question_type"], "True or False")
-        self.assertTrue(
-            validate_candidate(result["questions"][0], "True or False")
+        self.assertEqual(result["questions"], [])
+        self.assertIn(
+            {"reason": "not_enough_distinct_distractors", "count": 1},
+            result["diagnostics"]["rejections"],
         )
 
     def test_lesson_low_confidence_definitions_are_unclassified_and_supported(self):
         lesson = (
-            "Router is a network device that forwards data packets. "
-            "Gateway is a network device that connects separate networks. "
-            "Firewall is a security system that filters network traffic. "
-            "Switch is a network device that forwards frames locally. "
-            "Server is a computer system that provides network services."
+            "router is a network device that forwards data packets. "
+            "gateway is a network device that connects separate networks. "
+            "firewall is a security system that filters network traffic. "
+            "switch is a network device that forwards frames locally. "
+            "server is a computer system that provides network services. "
+            "access point is a network device that connects wireless clients to a network."
         )
         with patch(
             "app.questions.predict_distributions",
@@ -431,6 +738,7 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             ],
         ):
             result = self.generate(
+                question_type="Identification",
                 sources=[{
                     "id": "lesson-1",
                     "name": "One lesson",
@@ -441,19 +749,38 @@ class PracticeQuestionUnitTests(unittest.TestCase):
                 difficulty="Easy",
                 requested_count=4,
                 per_topic=4,
+                training_examples=[
+                    *TRAINING,
+                    ("COBIT governance framework controls organizational risk", "IT Governance"),
+                ],
             )
 
-        self.assertEqual(len(result["questions"]), 4)
-        self.assertTrue(
-            all(item["topic"] == "Unclassified" for item in result["questions"])
-        )
+        self.assertGreater(len(result["questions"]), 0)
+        self.assertLessEqual(len(result["questions"]), 4)
+        self.assertTrue(all(item["topic"] == "Unclassified" for item in result["questions"]))
+        answer_terms = {
+            item["correct_answer"].casefold()
+            for item in result["questions"]
+            if item["question_type"] == "Multiple Choice"
+        }
+        option_sets = []
         for item in result["questions"]:
             self.assertTrue(validate_candidate(item, item["question_type"]))
             if item["question_type"] == "Multiple Choice":
-                self.assertIn(item["correct_answer"], item["cited_passage"])
+                self.assertIn(item["correct_answer"].casefold(), item["cited_passage"].casefold())
                 self.assertTrue(
                     all(choice.casefold() in lesson.casefold() for choice in item["choices"])
                 )
+                self.assertTrue(all(
+                    _normalize_choice(choice) == choice
+                    for choice in item["choices"]
+                ), repr(item["choices"]))
+                self.assertFalse(any("cobit" in choice.casefold() for choice in item["choices"]))
+                self.assertFalse(any(
+                    choice.casefold() in answer_terms - {item["correct_answer"].casefold()}
+                    for choice in item["choices"]
+                ))
+                option_sets.append(frozenset(choice.casefold() for choice in item["choices"]))
                 self.assertTrue(
                     all(
                         _similar_definition_term(item["correct_answer"], choice)
@@ -464,6 +791,7 @@ class PracticeQuestionUnitTests(unittest.TestCase):
                 self.assertFalse(
                     any(choice.casefold() in {"you", "code"} for choice in item["choices"])
                 )
+        self.assertEqual(len(option_sets), len(set(option_sets)))
         self.assertEqual(result["diagnostics"]["skipped_low_confidence"], 0)
         self.assertGreater(result["diagnostics"]["low_confidence_unclassified"], 0)
 
@@ -525,8 +853,8 @@ class PracticeQuestionUnitTests(unittest.TestCase):
                 [{"topic": "Networking", "confidence": 0.9}] for _ in texts
             ],
         ) as classify:
-            templates = extract_exam_stem_templates(exam_sources, TRAINING)
-            cached_templates = extract_exam_stem_templates(exam_sources, TRAINING)
+            templates = extract_exam_question_patterns(exam_sources, TRAINING)
+            cached_templates = extract_exam_question_patterns(exam_sources, TRAINING)
         self.assertEqual(cached_templates, templates)
         classify.assert_called_once()
         which_template = next(
@@ -535,7 +863,7 @@ class PracticeQuestionUnitTests(unittest.TestCase):
         self.assertEqual(which_template["question_type"], "Multiple Choice")
         self.assertEqual(which_template["topic"], "Networking")
         self.assertEqual(which_template["frequency"], 2)
-        self.assertNotIn("packet routing", which_template["template"].casefold())
+        self.assertNotIn("template", which_template)
 
     def test_exam_stem_classifier_skips_empty_and_stopword_only_inputs(self):
         exam_sources = [{
@@ -551,7 +879,7 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             "app.questions.predict_distributions",
             return_value=[[{"topic": "Networking", "confidence": 0.9}]],
         ) as classify:
-            templates = extract_exam_stem_templates(exam_sources, TRAINING)
+            templates = extract_exam_question_patterns(exam_sources, TRAINING)
         classify.assert_called_once()
         self.assertEqual(
             classify.call_args.args[0],
@@ -576,60 +904,61 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             return [[{"topic": "Networking", "confidence": 0.9}]]
 
         with patch("app.questions.predict_distributions", side_effect=classify):
-            templates = extract_exam_stem_templates(exam_sources, TRAINING)
+            templates = extract_exam_question_patterns(exam_sources, TRAINING)
         self.assertEqual(len(templates), 1)
         self.assertEqual(templates[0]["frequency"], 1)
 
-    def test_generation_varies_question_wording_with_exam_stem_templates(self):
+    def test_generation_writes_a_concept_question_without_pasting_the_source(self):
         result = self.generate(
-            style_templates=[{
-                "question_type": "Multiple Choice",
-                "topic": "Networking",
-                "pattern": "what",
-                "template": "What concept is described in this lesson? {content}",
-                "frequency": 3,
-            }],
+            question_type="Identification",
             requested_count=1,
             per_topic=1,
         )
         self.assertTrue(result["questions"])
-        self.assertTrue(
-            result["questions"][0]["question_text"].startswith(
-                "What concept is described in this lesson?"
-            )
-        )
+        question = result["questions"][0]["question_text"].casefold()
+        self.assertNotIn("this passage", question)
+        self.assertNotIn("this lesson", question)
+        self.assertNotIn("according to the passage", question)
+        self.assertNotIn(result["questions"][0]["cited_passage"].casefold(), question)
 
     def test_lesson_generation_balances_candidates_across_uploaded_lessons(self):
         lessons = [
             {
                 "id": "lesson-a",
-                "name": "Routing lesson",
+                "name": "Measurement lesson",
                 "kind": "lesson",
                 "text": (
-                    "Router is a device that forwards data packets between networks using routing tables. "
-                    "Routing is a process that selects paths for data packets across connected networks. "
-                    "Network protocol is a formal set of rules that controls communication between devices. "
-                    "Packet switching is a method that sends data in units across a computer network."
+                    "Oscilloscope is an instrument used to display electrical signals as waveforms. "
+                    "Multimeter is an instrument used to measure voltage, current, and resistance. "
+                    "Voltmeter is an instrument used to measure electrical potential difference. "
+                    "Ammeter is an instrument used to measure electric current."
                 ),
             },
             {
                 "id": "lesson-b",
-                "name": "Address lesson",
+                "name": "Physical quantities lesson",
                 "kind": "lesson",
                 "text": (
-                    "Network address is an identifier that locates a device on an interconnected network. "
-                    "Packet route is a selected path that carries packets through connected network devices. "
-                    "Network link is a connection that transfers data between neighboring network devices. "
-                    "Router interface is a connection point that sends packets between separate networks."
+                    "Ohmmeter is an instrument used to measure electrical resistance. "
+                    "Wattmeter is an instrument used to measure electrical power. "
+                    "Thermometer is an instrument used to measure temperature. "
+                    "Frequency counter is an instrument used to measure signal frequency."
                 ),
             },
         ]
-        result = self.generate(
-            sources=lessons,
-            lesson_mode=True,
-            requested_count=2,
-            per_topic=2,
-        )
+        with patch(
+            "app.questions.predict_distributions",
+            side_effect=lambda texts, examples, **kwargs: [
+                [{"topic": "Networking", "confidence": 0.9}]
+                for _ in texts
+            ],
+        ):
+            result = self.generate(
+                sources=lessons,
+                lesson_mode=True,
+                requested_count=2,
+                per_topic=2,
+            )
         self.assertGreaterEqual(len(result["questions"]), 2)
         self.assertEqual(
             {item["source_material_id"] for item in result["questions"]},
@@ -728,6 +1057,21 @@ class PracticeQuestionApiTests(unittest.TestCase):
         self.assertEqual(material_response.status_code, 200, material_response.text)
         return dataset_response.json(), material_response.json()
 
+    def generate_lesson_questions(self, dataset, lesson):
+        return self.client.post(
+            "/api/questions/generate",
+            json={
+                "training_dataset_id": dataset["id"],
+                "upload_ids": [lesson["id"]],
+                "lesson_upload_id": lesson["id"],
+                "lesson_only": True,
+                "question_type": "Multiple Choice",
+                "difficulty": "Moderate",
+                "number_of_questions": 2,
+                "questions_per_topic": 2,
+            },
+        )
+
     def test_generation_conceals_answer_until_requested_and_saves_to_database(self):
         dataset, material = self.create_dataset_and_material()
         response = self.client.post(
@@ -753,6 +1097,7 @@ class PracticeQuestionApiTests(unittest.TestCase):
         )
         self.assertEqual(answer.status_code, 200, answer.text)
         self.assertTrue(answer.json()["answers"][question_id])
+        self.assertTrue(answer.json()["explanations"][question_id])
 
         saved = self.client.post(
             "/api/questions/save",
@@ -831,7 +1176,7 @@ class PracticeQuestionApiTests(unittest.TestCase):
                 "upload_ids": [lesson["id"]],
                 "lesson_upload_id": lesson["id"],
                 "lesson_only": True,
-                "question_type": "Multiple Choice",
+                "question_type": "Identification",
                 "difficulty": "Moderate",
                 "number_of_questions": 2,
                 "questions_per_topic": 2,
@@ -947,6 +1292,27 @@ class PracticeQuestionApiTests(unittest.TestCase):
                     len(MATERIAL),
                 ),
             )
+            db.execute(
+                "INSERT INTO uploads(id, name, stored_path, bytes, text_chars) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (
+                    "past-exam-docx",
+                    "Fundamentals_Exam.docx",
+                    str(exam_path),
+                    exam_path.stat().st_size,
+                    len(MATERIAL),
+                ),
+            )
+        listed_uploads = self.client.get("/api/uploads").json()
+        docx_upload = next(
+            item for item in listed_uploads if item["id"] == "past-exam-docx"
+        )
+        self.assertIsNone(docx_upload["is_exam"])
+        self.assertTrue(docx_upload["exam_auto"])
+        docx_override = self.client.put(
+            "/api/uploads/past-exam-docx/exam", json={"is_exam": False}
+        )
+        self.assertEqual(docx_override.status_code, 200, docx_override.text)
         extract_text = main.extract_text
 
         def extract_exam_text(name, content):
@@ -955,37 +1321,28 @@ class PracticeQuestionApiTests(unittest.TestCase):
             return extract_text(name, content)
 
         with patch.object(main, "extract_text", side_effect=extract_exam_text):
-            response = self.client.post(
-                "/api/questions/generate",
-                json={
-                    "training_dataset_id": dataset["id"],
-                    "upload_ids": [lesson["id"]],
-                    "lesson_upload_id": lesson["id"],
-                    "lesson_only": True,
-                    "question_type": "Multiple Choice",
-                    "difficulty": "Moderate",
-                    "number_of_questions": 2,
-                    "questions_per_topic": 2,
-                },
-            )
+            response = self.generate_lesson_questions(dataset, lesson)
         self.assertEqual(response.status_code, 200, response.text)
         generated = response.json()
         self.assertTrue(generated["exam_evidence_available"])
         self.assertIn("Networks_Exam.pdf", generated["exam_sources"])
         self.assertTrue(generated["style_reference_enabled"])
         self.assertEqual(generated["style_reference_files"], 1)
-        self.assertGreater(generated["style_template_count"], 0)
+        self.assertGreater(generated["question_pattern_count"], 0)
         self.assertIn("fit_seconds", generated["classifier_training"])
         self.assertGreater(generated["classifier_training"]["exam_passages_added"], 0)
-        self.assertTrue(generated["questions"])
-        self.assertTrue(
-            all(item["source_material_name"] == lesson["name"] for item in generated["questions"])
-        )
-        self.assertTrue(
-            all("Networks_Exam.pdf" not in item["source_reference"] for item in generated["questions"])
-        )
+        self.assertEqual(generated["questions"], [])
+        self.assertTrue(any(
+            rejection["reason"] == "not_enough_distinct_distractors"
+            for rejection in generated["diagnostics"]["rejections"]
+        ))
+        self.assertTrue(all(
+            "this passage" not in item["question_text"].casefold()
+            and item["cited_passage"].casefold() not in item["question_text"].casefold()
+            for item in generated["questions"]
+        ))
 
-        with patch.object(main, "extract_exam_stem_templates", wraps=main.extract_exam_stem_templates) as extract:
+        with patch.object(main, "extract_exam_question_patterns", wraps=main.extract_exam_question_patterns) as extract:
             style_disabled = self.client.post(
                 "/api/questions/generate",
                 json={
@@ -1003,7 +1360,123 @@ class PracticeQuestionApiTests(unittest.TestCase):
         self.assertEqual(style_disabled.status_code, 200, style_disabled.text)
         self.assertFalse(style_disabled.json()["style_reference_enabled"])
         self.assertEqual(style_disabled.json()["style_reference_files"], 0)
+        self.assertFalse(style_disabled.json()["exam_evidence_available"])
         extract.assert_not_called()
+
+    def test_manually_marked_txt_upload_is_used_as_exam_evidence(self):
+        dataset, lesson = self.create_dataset_and_material()
+        upload_response = self.client.post(
+            "/api/upload",
+            files={"file": ("Midterm.txt", MATERIAL.encode(), "text/plain")},
+        )
+        self.assertEqual(upload_response.status_code, 200, upload_response.text)
+        upload = upload_response.json()
+
+        updated = self.client.put(
+            f"/api/uploads/{upload['id']}/exam", json={"is_exam": True}
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertTrue(updated.json()["is_exam"])
+        listed = self.client.get("/api/uploads").json()
+        exam_upload = next(item for item in listed if item["id"] == upload["id"])
+        self.assertTrue(exam_upload["is_exam"])
+        self.assertFalse(exam_upload["exam_auto"])
+
+        generated = self.generate_lesson_questions(dataset, lesson)
+        self.assertEqual(generated.status_code, 200, generated.text)
+        self.assertTrue(generated.json()["exam_evidence_available"])
+        self.assertIn("Midterm.txt", generated.json()["exam_sources"])
+
+    def test_manually_unmarked_exam_filename_is_not_used_as_exam_evidence(self):
+        dataset, lesson = self.create_dataset_and_material()
+        upload_response = self.client.post(
+            "/api/upload",
+            files={"file": ("Networks_Exam.txt", MATERIAL.encode(), "text/plain")},
+        )
+        self.assertEqual(upload_response.status_code, 200, upload_response.text)
+        upload = upload_response.json()
+
+        listed = self.client.get("/api/uploads").json()
+        exam_upload = next(item for item in listed if item["id"] == upload["id"])
+        self.assertIsNone(exam_upload["is_exam"])
+        self.assertTrue(exam_upload["exam_auto"])
+
+        updated = self.client.put(
+            f"/api/uploads/{upload['id']}/exam", json={"is_exam": False}
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertFalse(updated.json()["is_exam"])
+
+        generated = self.generate_lesson_questions(dataset, lesson)
+        self.assertEqual(generated.status_code, 200, generated.text)
+        self.assertFalse(generated.json()["exam_evidence_available"])
+        self.assertNotIn("Networks_Exam.txt", generated.json()["exam_sources"])
+
+    def test_updating_exam_flag_for_missing_upload_returns_404(self):
+        response = self.client.put(
+            "/api/uploads/missing/exam", json={"is_exam": True}
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_oldest_generated_set_is_evicted_and_cannot_be_saved(self):
+        uploaded = self.client.post(
+            "/api/upload",
+            files={"file": ("source.txt", MATERIAL.encode(), "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        question = {
+            "id": "generated-question",
+            "correct_answer": "Router",
+            "question_text": "Which concept forwards packets?",
+        }
+        request = {
+            "training_dataset_id": "builtin",
+            "upload_ids": [uploaded.json()["id"]],
+            "question_type": "Multiple Choice",
+            "difficulty": "Moderate",
+            "number_of_questions": 1,
+            "questions_per_topic": 1,
+        }
+
+        with patch.object(main, "get_decision_policy", return_value={}), patch.object(
+            main, "generate_questions", return_value={"questions": [question]}
+        ):
+            generated_sets = [
+                self.client.post("/api/questions/generate", json=request)
+                for _ in range(main._MAX_QUESTION_BATCHES + 1)
+            ]
+
+        self.assertTrue(
+            all(response.status_code == 200 for response in generated_sets),
+            [response.text for response in generated_sets if response.status_code != 200],
+        )
+        oldest_generation_id = generated_sets[0].json()["generation_id"]
+        self.assertNotIn(oldest_generation_id, main._question_batches)
+        self.assertEqual(len(main._question_batches), main._MAX_QUESTION_BATCHES)
+
+        unavailable_detail = (
+            "This practice set is no longer available (the app was restarted or newer sets "
+            "replaced it). Generate the questions again to save them or reveal the answer key."
+        )
+        saved = self.client.post(
+            "/api/questions/save",
+            json={
+                "generation_id": oldest_generation_id,
+                "question_ids": ["generated-question"],
+            },
+        )
+        self.assertEqual(saved.status_code, 410)
+        self.assertEqual(saved.json()["detail"], unavailable_detail)
+
+        answers = self.client.post(
+            "/api/questions/answers",
+            json={
+                "generation_id": oldest_generation_id,
+                "question_ids": ["generated-question"],
+            },
+        )
+        self.assertEqual(answers.status_code, 410)
+        self.assertEqual(answers.json()["detail"], unavailable_detail)
 
     def test_generation_accepts_all_selected_materials_beyond_ten_files(self):
         upload_ids = []

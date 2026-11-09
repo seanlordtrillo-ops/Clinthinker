@@ -1,11 +1,11 @@
 {
   "name": "clinthinker",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run build:web && powershell.exe -NoProfile -ExecutionPolicy Bypass -File ..\\build-windows-app.ps1 -SkipFrontendBuild",
+    "build": "npm run build:web && powershell.exe -NoProfile -ExecutionPolicy Bypass -File ..\\build-windows-app.ps1 -SkipFrontendBuild -SkipLocalShortcuts",
     "build:web": "vite build",
     "preview": "vite preview"
   },

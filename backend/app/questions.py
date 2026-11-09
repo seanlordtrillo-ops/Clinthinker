@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import math
 import random
@@ -45,8 +46,8 @@ _INVALID_TERM_STARTS = {
 }
 _DISTRACTOR_JUNK = ENGLISH_STOP_WORDS | {
     "all values", "code", "concept", "data", "example", "information", "item",
-    "object", "process", "result", "stuff", "system", "thing", "type", "value",
-    "values", "way", "you",
+    "object", "passage", "process", "result", "source", "stuff", "system", "text",
+    "thing", "type", "value", "values", "way", "you",
 }
 _PRONOUNS = {
     "he", "her", "hers", "herself", "him", "himself", "his", "i", "it", "its",
@@ -54,6 +55,25 @@ _PRONOUNS = {
     "themselves", "they", "us", "we", "you", "your", "yours", "yourself",
     "yourselves",
 }
+_INVALID_TERM_ADJECTIVES = {
+    "basic", "common", "effective", "essential", "good", "important", "key",
+    "main", "necessary", "proper",
+}
+_UNCOUNTABLE_NOUNS = {"data", "equipment", "hardware", "information", "software"}
+_KNOWN_ACRONYMS = {
+    "ACL", "ALU", "API", "BIOS", "CPU", "DHCP", "DNS", "FCAPS", "GPU",
+    "HDMI", "HDD", "HTTP", "HTTPS", "ISO", "IP", "MIB", "NIC", "NMS",
+    "NVMe", "OID", "PCIe", "PSU", "RAID", "RAM", "REST", "RJ-45", "ROM",
+    "SATA", "SDN", "SLA", "SNMP", "SSD", "SSH", "TCP", "UEFI", "UDP",
+    "USB", "USB-C", "WAN", "YANG",
+}
+_KNOWN_PROPER_NOUNS = {
+    "Amazon", "Ansible", "Apple", "Google", "Intel", "Microsoft", "NVIDIA",
+}
+_KNOWN_PROPER_NOUN_PHRASES = {
+    "Amazon Web Services", "Google Cloud", "Microsoft Azure",
+}
+_FOLDED_ACRONYMS = {item.casefold() for item in _KNOWN_ACRONYMS}
 _INCOMPLETE_ENDINGS = re.compile(
     r"\b(?:a|an|and|are|as|because|but|by|for|from|in|is|of|or|that|the|to|"
     r"was|were|which|with)$",
@@ -79,14 +99,16 @@ _PAGE_NUMBER_LINE = re.compile(
     r"^\s*(?:page\s+)?\d+\s*(?:of\s+\d+|/\s*\d+)?\s*$",
     re.IGNORECASE,
 )
-_EXAM_STEM_TEMPLATE_CACHE: OrderedDict[str, list[dict]] = OrderedDict()
 
 
-def _cache_exam_stem_templates(key: str, templates: list[dict]) -> None:
-    _EXAM_STEM_TEMPLATE_CACHE[key] = templates
-    _EXAM_STEM_TEMPLATE_CACHE.move_to_end(key)
-    while len(_EXAM_STEM_TEMPLATE_CACHE) > 4:
-        _EXAM_STEM_TEMPLATE_CACHE.popitem(last=False)
+_EXAM_QUESTION_PATTERN_CACHE: OrderedDict[str, list[dict]] = OrderedDict()
+
+
+def _cache_exam_question_patterns(key: str, patterns: list[dict]) -> None:
+    _EXAM_QUESTION_PATTERN_CACHE[key] = patterns
+    _EXAM_QUESTION_PATTERN_CACHE.move_to_end(key)
+    while len(_EXAM_QUESTION_PATTERN_CACHE) > 4:
+        _EXAM_QUESTION_PATTERN_CACHE.popitem(last=False)
 
 
 def validate_weights(weights: Mapping[str, float] | None) -> dict[str, float]:
@@ -144,6 +166,7 @@ def _definition(sentence: str) -> tuple[str, str] | None:
         or len(term_words) > 4
         or any(len(word) < 3 and not word.isupper() for word in term_words)
         or term_words[0].casefold() in _INVALID_TERM_STARTS
+        or term_words[0].casefold() in _INVALID_TERM_ADJECTIVES
         or len(explanation) < 12
         or _INCOMPLETE_ENDINGS.search(explanation.rstrip(".!?"))
         or term.casefold() == explanation.casefold()
@@ -167,7 +190,6 @@ def _usable_distractor(
         or normalized in _DISTRACTOR_JUNK
         or len(words) == 1 and words[0] in _DISTRACTOR_JUNK
         or any(word in _PRONOUNS for word in words)
-        or (len(answer.split()) > 1 and len(words) < 2)
         or normalized == answer.casefold()
         or normalized in other_answers
         or normalized in question.casefold()
@@ -177,12 +199,355 @@ def _usable_distractor(
     return True
 
 
+def _definition_category(explanation: str) -> str:
+    normalized = re.sub(r"\s+", " ", explanation).strip().rstrip(".!?").casefold()
+    example = re.match(r"^(?:an?|the)\s+examples?\s+of\s+(.+)$", normalized)
+    if example:
+        target = example.group(1).rstrip("s")
+        if "cloud provider" in target:
+            return "organization"
+        return "example"
+    if re.match(
+        r"^(?:an?\s+|the\s+)?(?:company|organization|provider)\b",
+        normalized,
+    ):
+        return "organization"
+    if re.match(r"^(?:an?\s+|the\s+)?facility\b", normalized):
+        return "facility"
+    headword = _definition_headword(normalized)
+    defining_phrase = re.split(
+        r"\b(?:that|which|who|in which|where|when)\b",
+        normalized,
+        maxsplit=1,
+    )[0]
+    if "storage" in defining_phrase and headword in {
+        "device", "drive", "interface", "medium", "protocol", "technology",
+    }:
+        return "storage_technology"
+    if headword in {"bus", "technology"} and "storage" in normalized:
+        return "storage_technology"
+    if headword in {
+        "component", "device", "hardware", "part", "peripheral",
+    }:
+        return "physical_component"
+    if headword in {"act", "method", "practice", "process", "technique"}:
+        return "process"
+    if headword in {"rule", "protocol", "standard"}:
+        return "protocol"
+    return headword
+
+
+def _singularize_headword(word: str) -> str:
+    if word.endswith("ies") and len(word) > 4:
+        return f"{word[:-3]}y"
+    if word.endswith("s") and not word.endswith(("ss", "us", "is")) and len(word) > 3:
+        return word[:-1]
+    return word
+
+
+def _definition_headword(explanation: str) -> str:
+    normalized = re.sub(r"\s+", " ", explanation).strip().rstrip(".!?").casefold()
+    normalized = re.sub(r"^(?:a|an|the)\s+", "", normalized)
+    if re.match(r"^unit\s+of\s+", normalized):
+        return "unit"
+    if re.match(r"^collection\s+of\s+(?:physical\s+)?components?\b", normalized):
+        return "physical_component"
+    phrase = re.split(
+        r"\b(?:that|which|who|in which|where|when|used to|designed to|located)\b",
+        normalized,
+        maxsplit=1,
+    )[0].strip()
+    words = re.findall(r"[a-z0-9-]+", phrase)
+    if not words:
+        return "concept"
+    headword = _singularize_headword(words[-1])
+    return headword
+
+
+def _article_for(word: str) -> str:
+    folded = word.casefold()
+    if folded.startswith(("uni", "use", "user", "euro", "one", "once")):
+        return "a"
+    if folded.startswith(("hour", "honest", "honor", "heir")):
+        return "an"
+    if folded in _FOLDED_ACRONYMS:
+        return "an" if word[:1].upper() in {
+            "A", "E", "F", "H", "I", "L", "M", "N", "O", "R", "S", "X",
+        } else "a"
+    return "an" if folded[:1] in "aeiou" else "a"
+
+
+def _correct_indefinite_articles(text: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        article, word = match.groups()
+        if word.casefold() in _UNCOUNTABLE_NOUNS:
+            return word.capitalize() if article[:1].isupper() else word
+        corrected = _article_for(word)
+        if article[:1].isupper():
+            corrected = corrected.capitalize()
+        return f"{corrected} {word}"
+
+    return re.sub(r"\b(an?)\s+([A-Za-z][A-Za-z0-9-]*)", replace, text, flags=re.IGNORECASE)
+
+
+def _normalize_choice(term: str) -> str:
+    if term in _KNOWN_PROPER_NOUN_PHRASES:
+        return term
+    words = term.split()
+    normalized = []
+    for word in words:
+        clean_word = word.strip(".,;:()[]{}")
+        if (
+            clean_word.casefold() in _FOLDED_ACRONYMS
+            or clean_word in _KNOWN_PROPER_NOUNS
+            or any(character.isdigit() for character in clean_word)
+            or not clean_word.isupper()
+            and any(character.isupper() for character in clean_word[1:])
+        ):
+            normalized.append(word)
+        else:
+            normalized.append(word.lower())
+    if normalized:
+        normalized[0] = normalized[0][:1].upper() + normalized[0][1:]
+    return " ".join(normalized)
+
+
+def _is_concept_term(term: str) -> bool:
+    normalized = re.sub(r"\s+", " ", term).strip().casefold()
+    words = normalized.split()
+    return (
+        len(words) <= 4
+        and len(normalized) >= 3
+        and normalized not in _DISTRACTOR_JUNK
+        and not any(word in _DISTRACTOR_JUNK for word in words)
+        and not any(word in _PRONOUNS for word in words)
+    )
+
+
+def _question_from_definition_raw(term: str, explanation: str, order: int) -> str | None:
+    explanation = re.sub(r"\s+", " ", explanation).strip().rstrip(".!?")
+    example = re.fullmatch(r"(?:an?|the)\s+example\s+of\s+(.+)", explanation, re.IGNORECASE)
+    if example:
+        return f"Which of the following is an example of {example.group(1).strip()}?"
+
+    rules = re.match(
+        r"^(?:a|an|the)\s+(?:formal\s+)?set\s+of\s+rules\s+that\s+"
+        r"(?:govern|governs)\s+(.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if rules:
+        headword = term.split()[-1].casefold()
+        return f"Which {headword} governs {rules.group(1).rstrip('.!?')}?"
+
+    organization = re.match(
+        r"^(?:a|an|the)\s+(?:company|organization)\s+that\s+(.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if organization:
+        return (
+            "Which term refers to an organization that "
+            f"{organization.group(1).strip().rstrip('.!?')}?"
+        )
+
+    in_which_clause = re.match(
+        r"^(?:(?:a|an|the)\s+)?(?P<category>[\w-]+(?:\s+[\w-]+){0,4}?)\s+"
+        r"(?P<connector>in which|where|when)\s+(?P<clause>.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if in_which_clause:
+        category = in_which_clause.group("category").strip()
+        connector = in_which_clause.group("connector").casefold()
+        clause = in_which_clause.group("clause").strip().rstrip(".!?")
+        return f"Which term describes a {category} {connector} {clause}?"
+
+    relative_clause = re.match(
+        r"^(?:(?:a|an|the)\s+)?(?P<category>[\w-]+(?:\s+[\w-]+){0,4}?)\s+"
+        r"(?:that|which|who)\s+(?P<clause>.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if relative_clause:
+        category = relative_clause.group("category").strip()
+        clause = relative_clause.group("clause").strip().rstrip(".!?")
+        if category.casefold().split()[-1] in {"in", "of", "on", "to", "at", "for"}:
+            return None
+        if category.casefold() in {"research", "study"}:
+            return f"Which type of {category} {clause}?"
+        return f"Which term describes a {category} that {clause}?"
+
+    instrument = re.match(
+        r"^(?:a|an|the)\s+(?P<category>instrument|tool|method)\s+"
+        r"(?:that\s+)?(?:is\s+)?used\s+to\s+(?P<action>.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if instrument:
+        category = instrument.group("category").casefold()
+        action = instrument.group("action").strip().rstrip(".!?")
+        return f"Which {category} is used to {action}?"
+
+    process = re.match(
+        r"^(?:the\s+)?(?P<category>process|practice|act)\s+of\s+(?P<action>.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if process:
+        category = process.group("category").casefold()
+        action = process.group("action").strip().rstrip(".!?")
+        return f"Which {category} involves {action}?"
+
+    variable = re.search(
+        r"\bvariable\s+(?:that\s+is\s+)?manipulated\s+by\s+(?:the\s+)?researcher\b",
+        explanation,
+        re.IGNORECASE,
+    )
+    if variable:
+        return "Which variable does the researcher deliberately change?"
+
+    delivery = re.match(r"^the\s+delivery\s+of\s+(.+)$", explanation, re.IGNORECASE)
+    if delivery:
+        return f"Which term describes the delivery of {delivery.group(1).strip()}?"
+
+    technology = re.match(
+        r"^(?:the\s+)?technology\s+that\s+(.+)$", explanation, re.IGNORECASE
+    )
+    if technology:
+        return f"Which term describes the technology that {technology.group(1).strip()}?"
+
+    ability = re.match(
+        r"^(?:the\s+)?ability\s+of\s+(.+)$", explanation, re.IGNORECASE
+    )
+    if ability:
+        return f"Which term describes the ability of {ability.group(1).strip()}?"
+
+    return None
+
+
+def _question_from_definition(term: str, explanation: str, order: int) -> str | None:
+    question = _question_from_definition_raw(term, explanation, order)
+    return _correct_indefinite_articles(question) if question else None
+
+
+def _statement_from_definition_raw(term: str, explanation: str) -> str:
+    explanation = re.sub(r"\s+", " ", explanation).strip().rstrip(".!?")
+    folded_term = term.casefold()
+    if "independent variable" in folded_term:
+        return "The researcher changes the independent variable to test its effect on the outcome."
+    if "dependent variable" in folded_term:
+        return "The researcher measures the dependent variable to observe the study's outcome."
+    if "quantitative research" in folded_term:
+        return "A study that analyzes numerical measurements follows a quantitative approach."
+    if "qualitative research" in folded_term:
+        return "A study that interprets participants' experiences follows a qualitative approach."
+    if "questionnaire" in folded_term:
+        return "A researcher collecting opinions from a large group can use a questionnaire."
+
+    instrument = re.match(
+        r"^(?:a|an|the)\s+(?:instrument|tool|method)\s+"
+        r"(?:that\s+)?(?:is\s+)?used\s+to\s+(.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if instrument:
+        article = "an" if term[0].casefold() in "aeiou" else "a"
+        return (
+            f"A researcher who needs to {instrument.group(1).rstrip('.!?')} "
+            f"can use {article} {term.casefold()}."
+        )
+
+    if "router" in folded_term and "packet" in explanation.casefold():
+        return "When a packet must reach another network, a router forwards it along a route."
+    if "routing" in folded_term and "path" in explanation.casefold():
+        return "Routing selects a path for a packet traveling across connected networks."
+    if "protocol" in folded_term and "rule" in explanation.casefold():
+        return "A network protocol helps devices follow shared communication rules."
+    if "packet switching" in folded_term:
+        return "A network that sends data in small units is using packet switching."
+
+    relative_clause = re.match(
+        r"^(?:(?:a|an|the)\s+)?(?P<category>[\w -]{2,45}?)\s+"
+        r"(?:that|which|who)\s+(?P<clause>.+)$",
+        explanation,
+        re.IGNORECASE,
+    )
+    if relative_clause:
+        clause = relative_clause.group("clause").strip().rstrip(".!?")
+        subject = term[0].upper() + term[1:]
+        if len(term.split()) == 1 and not term.casefold().endswith(("s", "ing")):
+            article = "An" if term[0].casefold() in "aeiou" else "A"
+            subject = f"{article} {term.casefold()}"
+        return f"{subject} {clause[0].lower() + clause[1:]}."
+    return f"{term[0].upper() + term[1:]} is associated with {explanation[0].lower() + explanation[1:]}."
+
+
+def _statement_from_definition(term: str, explanation: str) -> str:
+    return _correct_indefinite_articles(
+        _statement_from_definition_raw(term, explanation)
+    )
+
+
+def _distractor_matches_stem_category(
+    question: str,
+    explanation: str,
+    term: str = "",
+) -> bool:
+    example_stem = re.search(
+        r"\ban example of\s+(.+?)\?\s*$",
+        question,
+        re.IGNORECASE,
+    )
+    if example_stem:
+        target = re.sub(
+            r"^(?:a|an|the)\s+",
+            "",
+            example_stem.group(1).strip().casefold(),
+        )
+        return bool(
+            re.search(
+                rf"\bexamples?\s+of\s+(?:an?\s+|the\s+)?{re.escape(target)}\b",
+                explanation,
+                re.IGNORECASE,
+            )
+        )
+    stem_category = re.search(
+            r"\b(?:describes|refers to|identifies)\s+(?:(?:an?|the)\s+)?(.+?)"
+        r"(?:\s+(?:that|which|who|in which|where|when)\b|\?|$)",
+        question,
+        re.IGNORECASE,
+    )
+    if not stem_category:
+        return False
+    phrase = stem_category.group(1).strip().casefold()
+    category = _definition_headword(phrase)
+    distractor_category = _definition_category(explanation)
+    if re.search(r"\bphysical\s+components?\b", phrase):
+        return distractor_category in {"physical_component", "storage_technology"}
+    if category == "hardware":
+        return distractor_category in {"physical_component", "storage_technology"}
+    if category in {"interface", "framework", "unit"}:
+        return category in {
+            _definition_headword(explanation),
+            distractor_category,
+        }
+    if category == "device":
+        return (
+            _definition_headword(explanation) == "device"
+            or "device" in term.casefold().split()
+        )
+    if category == "organization":
+        return distractor_category == "organization"
+    return False
+
+
 def _similar_definition_term(answer: str, distractor: str) -> bool:
     answer_words = re.findall(r"[A-Za-z0-9]+", answer)
     distractor_words = re.findall(r"[A-Za-z0-9]+", distractor)
     return (
-        len(answer_words) == len(distractor_words)
-        and abs(len(answer) - len(distractor)) <= max(4, len(answer) // 2)
+        abs(len(answer_words) - len(distractor_words)) <= 1
+        and abs(len(answer) - len(distractor)) <= max(16, len(answer) // 2)
     )
 
 
@@ -196,7 +561,27 @@ def _negate_statement(sentence: str) -> str | None:
         re.IGNORECASE,
     )
     if not match:
-        return None
+        prefix, separator, final_clause = sentence.rpartition(",")
+        if separator:
+            final_match = re.match(
+                r"^(.+?)\s+([A-Za-z]+s)\s+(.+)$",
+                final_clause.strip(),
+            )
+            if final_match:
+                subject, verb, remainder = final_match.groups()
+                return (
+                    f"{prefix}, {subject} does not {verb[:-1]} {remainder}"
+                )
+        simple_present = re.match(
+            r"^(.+?)\s+([A-Za-z]+s)\s+(.+)$",
+            sentence,
+        )
+        if not simple_present:
+            return None
+        subject, verb, remainder = simple_present.groups()
+        if len(subject.split()) == 1 and subject.casefold().endswith("s"):
+            return None
+        return f"{subject} does not {verb[:-1]} {remainder}"
     prefix = match.group(1)
     auxiliary = prefix.rsplit(None, 1)[-1]
     if auxiliary.casefold() == "can":
@@ -314,7 +699,7 @@ def _lesson_passages(text: str) -> list[dict]:
     return result
 
 
-def extract_exam_stem_templates(
+def extract_exam_question_patterns(
     exam_sources: Sequence[Mapping],
     training_examples: Sequence[tuple[str, str]],
     training_metrics: dict | None = None,
@@ -337,9 +722,9 @@ def extract_exam_stem_templates(
         cache_digest.update(b"\0")
     cache_digest.update(repr(sorted(policy.items())).encode("utf-8"))
     cache_key = cache_digest.hexdigest()
-    if cache_key in _EXAM_STEM_TEMPLATE_CACHE:
-        _EXAM_STEM_TEMPLATE_CACHE.move_to_end(cache_key)
-        return [dict(item) for item in _EXAM_STEM_TEMPLATE_CACHE[cache_key]]
+    if cache_key in _EXAM_QUESTION_PATTERN_CACHE:
+        _EXAM_QUESTION_PATTERN_CACHE.move_to_end(cache_key)
+        return [dict(item) for item in _EXAM_QUESTION_PATTERN_CACHE[cache_key]]
 
     stems = []
     for source in exam_sources:
@@ -358,35 +743,30 @@ def extract_exam_stem_templates(
             ):
                 continue
             if re.match(r"^(?:true\s+or\s+false|t/f)\b", line, re.IGNORECASE):
-                question_type, pattern, template = (
-                    "True or False",
-                    "true-false",
-                    "True or False: {content}",
-                )
+                question_type, pattern = "True or False", "true-false"
             elif re.match(r"^(?:define|identify|name|state)\b", line, re.IGNORECASE):
                 question_type = "Identification"
                 if re.match(r"^define\b", line, re.IGNORECASE):
-                    pattern, template = "define", "Define the concept using this passage: {content}"
+                    pattern = "define"
                 else:
-                    pattern, template = "identify", "Identify the concept from this passage: {content}"
+                    pattern = "identify"
             else:
                 question_type = "Multiple Choice"
                 if re.match(r"^which\s+of\s+the\s+following\b", line, re.IGNORECASE):
                     pattern = "which-of-following"
-                    template = "Which of the following concepts is described by this passage? {content}"
                 elif re.match(r"^what\b", line, re.IGNORECASE):
-                    pattern, template = "what", "What concept is described by this passage? {content}"
+                    pattern = "what"
                 else:
-                    pattern, template = "which", "Which concept is described by this passage? {content}"
-            stems.append((line, question_type, pattern, template))
+                    pattern = "which"
+            stems.append((line, question_type, pattern))
 
     stems = [stem for stem in stems if clean_text(stem[0])]
     if not stems:
-        _cache_exam_stem_templates(cache_key, [])
+        _cache_exam_question_patterns(cache_key, [])
         return []
     try:
         distributions = predict_distributions(
-            [line for line, _, _, _ in stems],
+            [line for line, _, _ in stems],
             training_examples,
             training_metrics=training_metrics,
         )
@@ -408,8 +788,7 @@ def extract_exam_stem_templates(
                 distributions.append(prediction[0])
         stems = classified_stems
     frequencies: Counter[tuple[str, str, str]] = Counter()
-    templates = {}
-    for (stem, question_type, pattern, template), distribution in zip(stems, distributions):
+    for (stem, question_type, pattern), distribution in zip(stems, distributions):
         classified = classify_with_policy(
             stem,
             training_examples,
@@ -421,13 +800,11 @@ def extract_exam_stem_templates(
             continue
         key = (question_type, classified["topic"], pattern)
         frequencies[key] += 1
-        templates[key] = template
-    templates = [
+    patterns = [
         {
             "question_type": question_type,
             "topic": topic,
             "pattern": pattern,
-            "template": templates[(question_type, topic, pattern)],
             "frequency": frequency,
         }
         for (question_type, topic, pattern), frequency in sorted(
@@ -435,32 +812,8 @@ def extract_exam_stem_templates(
             key=lambda item: (-item[1], item[0]),
         )
     ]
-    _cache_exam_stem_templates(cache_key, templates)
-    return [dict(item) for item in templates]
-
-
-def _style_question(
-    question_type: str,
-    topic: str,
-    content: str,
-    style_templates: Sequence[Mapping],
-    order: int,
-) -> str | None:
-    matches = [
-        item for item in style_templates
-        if item.get("question_type") == question_type
-        and item.get("topic") == topic
-    ]
-    if not matches:
-        matches = [
-            item for item in style_templates
-            if item.get("question_type") == question_type
-        ]
-    if not matches:
-        return None
-    matches = sorted(matches, key=lambda item: (-int(item.get("frequency", 0)), item.get("pattern", "")))
-    selected = matches[order % len(matches)]
-    return str(selected["template"]).replace("{content}", content)
+    _cache_exam_question_patterns(cache_key, patterns)
+    return [dict(item) for item in patterns]
 
 
 def rank_lesson_likelihood(
@@ -806,6 +1159,12 @@ def validate_candidate(
         or not excerpt
         or not cited_passage
         or not 24 <= len(question) <= 1000
+        or re.search(
+            r"\b(?:this passage|the text above|according to the passage)\b",
+            question,
+            re.IGNORECASE,
+        )
+        or cited_passage.casefold() in re.sub(r"\s+", " ", question).casefold()
         or cited_passage.casefold() not in re.sub(r"\s+", " ", source).casefold()
         or excerpt.casefold() not in str(candidate.get("source_content", "")).casefold()
         or cited_folded not in re.sub(
@@ -832,6 +1191,8 @@ def validate_candidate(
             len(normalized) == 4
             and all(normalized)
             and len(set(normalized)) == 4
+            and _is_concept_term(answer)
+            and all(_is_concept_term(choice) for choice in choices)
             and answer.casefold() in normalized
             and re.search(
                 rf"(?<!\w){re.escape(answer.casefold())}(?!\w)", cited_folded
@@ -846,6 +1207,10 @@ def validate_candidate(
                 )
                 for choice in wrong_choices
             )
+            and all(
+                _similar_definition_term(answer, choice)
+                for choice in wrong_choices
+            )
         )
     if question_type == "Identification":
         return (
@@ -854,16 +1219,17 @@ def validate_candidate(
                 rf"(?<!\w){re.escape(answer.casefold())}(?!\w)", cited_folded
             ) is not None
         )
-    if (
-        choices
-        or answer not in {"True", "False"}
-        or not question.startswith("True or False: ")
-    ):
+    if choices or answer not in {"True", "False"}:
         return False
-    statement = question.removeprefix("True or False: ").strip()
-    if answer == "True":
-        return statement == excerpt
-    return statement == _negate_statement(excerpt)
+    supported_statement = str(candidate.get("supported_statement", "")).strip()
+    if not supported_statement:
+        return False
+    expected_statement = (
+        supported_statement
+        if answer == "True"
+        else _negate_statement(supported_statement)
+    )
+    return bool(expected_statement and question == expected_statement)
 
 
 def question_preference_features(question: Mapping) -> dict[str, str]:
@@ -930,7 +1296,6 @@ def generate_questions(
     dataset_name: str,
     sources: Sequence[Mapping],
     lesson_mode: bool = False,
-    style_templates: Sequence[Mapping] = (),
     training_metrics: dict | None = None,
     saved_question_texts: Sequence[str] = (),
     preference_feedback: Sequence[Mapping] = (),
@@ -995,6 +1360,9 @@ def generate_questions(
                 diagnostics["no_readable_words"] += 1
                 continue
             definition = _definition(sentence)
+            if question_type == "True or False" and definition is None:
+                diagnostics["not_definition"] += 1
+                continue
             eligible = estimate_difficulty(sentence) == difficulty or (
                 lesson_mode
                 and question_type in {"Multiple Choice", "Identification"}
@@ -1030,8 +1398,10 @@ def generate_questions(
     )
 
     classified = []
-    definitions_by_source: dict[tuple[str, str, str], list[str]] = {}
-    lesson_definitions_by_source: dict[tuple[str, str], list[str]] = {}
+    definitions_by_source: dict[tuple[str, str, str], list[tuple[str, str]]] = {}
+    lesson_definitions_by_topic_source: dict[
+        tuple[str, str, str], list[tuple[str, str]]
+    ] = {}
     for candidate, distribution in zip(candidate_sources, distributions[1:]):
         source, sentence, definition, eligible, source_order = candidate
         classification = classify_with_policy(
@@ -1049,8 +1419,10 @@ def generate_questions(
             str(source.get("id") or source.get("name") or ""),
         )
         if lesson_mode and definition:
-            lesson_definitions_by_source.setdefault(source_key, []).append(
-                definition[0]
+            lesson_definitions_by_topic_source.setdefault(
+                (best["topic"], *source_key), []
+            ).append(
+                definition
             )
         if lesson_mode and best["topic"] == "Unclassified":
             diagnostics["low_confidence_unclassified"] += 1
@@ -1058,19 +1430,18 @@ def generate_questions(
         if definition and best["abstain_reason"] is None:
             definitions_by_source.setdefault(
                 (best["topic"], *source_key), []
-            ).append(definition[0])
+            ).append(definition)
 
-    training_definitions_by_topic: dict[str, list[str]] = {}
-    if not lesson_mode:
-        for text, topic in training_examples:
-            for sentence in _SENTENCE_END.split(text):
-                definition = _definition(sentence)
-                if definition:
-                    training_definitions_by_topic.setdefault(topic.strip(), []).append(
-                        definition[0]
-                    )
+    training_definitions_by_topic: dict[str, list[tuple[str, str]]] = {}
+    for text, topic in training_examples:
+        for sentence in _SENTENCE_END.split(text):
+            definition = _definition(sentence)
+            if definition:
+                training_definitions_by_topic.setdefault(topic.strip(), []).append(
+                    definition
+                )
     candidates: list[dict] = []
-    candidate_distractor_pools: dict[str, list[str]] = {}
+    candidate_distractor_pools: dict[str, list[tuple[str, str]]] = {}
     eligible_sentence_count = sum(candidate[3] for candidate in candidate_sources)
     for source, sentence, definition, eligible, best, source_order in classified:
         if not eligible:
@@ -1085,46 +1456,49 @@ def generate_questions(
 
         candidate_question_type = question_type
         if question_type == "True or False":
-            negated_sentence = _negate_statement(sentence)
-            if not negated_sentence:
+            if not definition:
                 diagnostics["no_safe_negation"] += 1
                 continue
-            question = _style_question(
-                question_type, best["topic"], sentence, style_templates, source_order
-            ) or f"True or False: {sentence}"
+            term, explanation = definition
+            supported_statement = _statement_from_definition(term, explanation)
+            if not _negate_statement(supported_statement):
+                diagnostics["no_safe_negation"] += 1
+                continue
+            question = supported_statement
             answer = "True"
             choices: list[str] = []
-            excerpt = sentence
+            excerpt = explanation
         else:
             term, explanation = definition
+            if not _is_concept_term(term):
+                diagnostics["not_definition"] += 1
+                continue
+            question = _question_from_definition(term, explanation, source_order)
+            if not question:
+                diagnostics["no_natural_stem"] += 1
+                continue
+            answer_category = _definition_category(explanation)
             if question_type == "Identification":
-                question = _style_question(
-                    question_type, best["topic"], explanation, style_templates, source_order
-                ) or f"Identify the concept described in the source: {explanation}"
                 answer = term
                 choices = []
             else:
-                distractors = []
+                distractors: list[tuple[str, str]] = []
                 seen_terms = {term.casefold()}
                 current_source_key = (
                     str(source.get("kind", "course")),
                     str(source.get("id") or source.get("name") or ""),
                 )
                 same_source = (
-                    definitions_by_source.get(
+                    lesson_definitions_by_topic_source.get(
+                        (best["topic"], *current_source_key), []
+                    )
+                    if lesson_mode
+                    else definitions_by_source.get(
                         (best["topic"], *current_source_key), []
                     )
                     if current_source_key[0] in {"course", "lesson"}
                     else []
                 )
-                if lesson_mode and best["topic"] == "Unclassified":
-                    same_source = [
-                        distractor
-                        for distractor in lesson_definitions_by_source.get(
-                            current_source_key, []
-                        )
-                        if _similar_definition_term(term, distractor)
-                    ]
                 other_material_sources = [
                     distractor
                     for (topic, kind, source_id), terms in definitions_by_source.items()
@@ -1136,53 +1510,45 @@ def generate_questions(
                 training_definitions = training_definitions_by_topic.get(
                     best["topic"], []
                 )
-                tiers = [same_source, other_material_sources]
-                if not lesson_mode:
-                    tiers.append(training_definitions)
+                tiers = (
+                    [same_source]
+                    if lesson_mode
+                    else [same_source, other_material_sources, training_definitions]
+                )
                 for tier in tiers:
-                    for distractor in tier:
+                    for distractor, distractor_explanation in tier:
+                        if _definition_category(distractor_explanation) != answer_category:
+                            continue
+                        if _distractor_matches_stem_category(
+                            question,
+                            distractor_explanation,
+                            distractor,
+                        ):
+                            continue
+                        distractor = _normalize_choice(distractor)
                         folded = re.sub(r"\s+", " ", distractor).strip().casefold()
                         if (
                             folded not in seen_terms
                             and _usable_distractor(
                                 distractor,
                                 term,
-                                f"Which concept is described by the source passage? {explanation}",
+                                question,
                                 sentence,
                                 set(),
                             )
+                            and _similar_definition_term(term, distractor)
                         ):
                             seen_terms.add(folded)
-                            distractors.append(distractor)
-                        if len(distractors) == 3 and not lesson_mode:
-                            break
-                    if len(distractors) == 3 and not lesson_mode:
-                        break
+                            distractors.append((distractor, distractor_explanation))
                 if len(distractors) < 3:
-                    if lesson_mode:
-                        candidate_question_type = "True or False"
-                        question = _style_question(
-                            candidate_question_type,
-                            best["topic"],
-                            sentence,
-                            style_templates,
-                            source_order,
-                        ) or f"True or False: {sentence}"
-                        answer = "True"
-                        choices = []
-                        excerpt = sentence
-                    else:
-                        diagnostics["not_enough_distinct_distractors"] += 1
-                        continue
+                    diagnostics["not_enough_distinct_distractors"] += 1
+                    continue
                 else:
-                    wrong = distractors[:3]
-                    choices = [term, *wrong]
+                    wrong = [item[0] for item in distractors[:3]]
+                    answer = _normalize_choice(term)
+                    choices = [answer, *wrong]
                     seed = int(hashlib.sha256(sentence.encode("utf-8")).hexdigest()[:8], 16)
                     random.Random(seed ^ uuid.uuid4().int).shuffle(choices)
-                    question = _style_question(
-                        question_type, best["topic"], explanation, style_templates, source_order
-                    ) or f"Which concept is described by the source passage? {explanation}"
-                    answer = term
             if candidate_question_type != "True or False":
                 excerpt = explanation
 
@@ -1195,7 +1561,7 @@ def generate_questions(
             f"Source Text/Reference: {reference_text}"
         )
         candidate_id = str(uuid.uuid4())
-        if lesson_mode and candidate_question_type == "Multiple Choice":
+        if candidate_question_type == "Multiple Choice":
             candidate_distractor_pools[candidate_id] = distractors
         candidate = {
             "id": candidate_id,
@@ -1218,6 +1584,8 @@ def generate_questions(
             "lesson_order": source_order,
             "created_at": None,
         }
+        if candidate_question_type == "True or False":
+            candidate["supported_statement"] = supported_statement
         if not validate_candidate(
             candidate,
             candidate_question_type,
@@ -1269,7 +1637,6 @@ def generate_questions(
     )
     counts: Counter[str] = Counter()
     accepted = []
-    accepted_answers: set[str] = set()
     previous = list(saved_question_texts) + [
         text for text, _ in training_examples
         if text.strip().endswith("?")
@@ -1280,88 +1647,85 @@ def generate_questions(
             re.IGNORECASE,
         )
     ]
+    accepted_option_sets: set[frozenset[str]] = set()
+    used_distractors: set[str] = set()
     for candidate in candidates:
         if len(accepted) >= requested_count:
             break
         if counts[candidate["topic"]] >= per_topic:
             diagnostics["per_topic_limit_reached"] += 1
             continue
-        candidate_answer = str(candidate["correct_answer"]).casefold()
-        accepted_distractors = {
-            str(choice).casefold()
-            for accepted_item in accepted
-            for choice in accepted_item.get("choices", [])
-            if str(choice).casefold() != str(accepted_item["correct_answer"]).casefold()
+        other_answers = {
+            str(item["correct_answer"]).casefold()
+            for item in accepted
+            if item["question_type"] == "Multiple Choice"
         }
-        if lesson_mode and candidate["question_type"] == "Multiple Choice":
+        selected_option_set = None
+        if candidate["question_type"] == "Multiple Choice":
+            if any(
+                candidate["correct_answer"].casefold()
+                in {choice.casefold() for choice in item["choices"]}
+                for item in accepted
+                if item["question_type"] == "Multiple Choice"
+            ):
+                diagnostics["answer_used_as_prior_distractor"] += 1
+                continue
             options = [
                 distractor
-                for distractor in candidate_distractor_pools.get(candidate["id"], [])
-                if distractor.casefold() not in accepted_answers
-                and distractor.casefold() not in accepted_distractors
+                for distractor, _ in candidate_distractor_pools.get(candidate["id"], [])
+                if distractor.casefold() not in used_distractors
                 and _usable_distractor(
                     distractor,
                     candidate["correct_answer"],
                     candidate["question_text"],
                     candidate["cited_passage"],
-                    accepted_answers | accepted_distractors,
+                    other_answers,
                 )
+                and _similar_definition_term(candidate["correct_answer"], distractor)
             ]
-            if candidate_answer in accepted_distractors or len(options) < 3:
-                candidate = {
-                    **candidate,
-                    "question_type": "True or False",
-                    "question_text": f"True or False: {candidate['cited_passage']}",
-                    "correct_answer": "True",
-                    "choices": [],
-                    "support_excerpt": candidate["cited_passage"],
-                }
+            selected_choices = None
+            for distractor_set in itertools.combinations(options, 3):
+                choices = [candidate["correct_answer"], *distractor_set]
+                option_set = frozenset(choice.casefold() for choice in choices)
+                if option_set in accepted_option_sets:
+                    continue
+                selected_choices = choices
+                selected_option_set = option_set
+                break
+            if selected_choices is None:
+                diagnostics["not_enough_distinct_distractors"] += 1
+                continue
             else:
-                choices = [candidate["correct_answer"], *options[:3]]
                 random.Random(
                     int(hashlib.sha256(candidate["cited_passage"].encode("utf-8")).hexdigest()[:8], 16)
                     ^ uuid.uuid4().int
-                ).shuffle(choices)
-                candidate = {**candidate, "choices": choices}
-        candidate_answer = str(candidate["correct_answer"]).casefold()
-        accepted_distractors = {
-            str(choice).casefold()
-            for accepted_item in accepted
-            for choice in accepted_item.get("choices", [])
-            if str(choice).casefold() != str(accepted_item["correct_answer"]).casefold()
-        }
-        if (
-            candidate_answer in accepted_distractors
-            or any(
-                str(choice).casefold() in accepted_answers
-                for choice in candidate.get("choices", [])
-                if str(choice).casefold() != candidate_answer
-            )
-        ):
-            diagnostics["distractor_is_answer_in_set"] += 1
-            continue
+                ).shuffle(selected_choices)
+                candidate = {**candidate, "choices": selected_choices}
         if not validate_candidate(
             candidate,
             candidate["question_type"],
-            accepted_answers,
+            other_correct_answers=[
+                *(
+                    item["correct_answer"]
+                    for item in accepted
+                    if item["question_type"] == "Multiple Choice"
+                ),
+            ],
         ):
             diagnostics["candidate_validation_failed"] += 1
             continue
         if candidate["question_type"] == "True or False":
-            excerpt = candidate["support_excerpt"]
-            negated_excerpt = _negate_statement(excerpt)
+            supported_statement = candidate["supported_statement"]
+            negated_statement = _negate_statement(supported_statement)
             answer = (
                 "True"
-                if negated_excerpt is None or (len(accepted) + true_false_offset) % 2 == 0
+                if negated_statement is None or (len(accepted) + true_false_offset) % 2 == 0
                 else "False"
             )
-            statement = excerpt if answer == "True" else negated_excerpt
-            question_text = _style_question(
-                candidate["question_type"], candidate["topic"], statement, style_templates, len(accepted)
-            ) or f"True or False: {statement}"
+            statement = supported_statement if answer == "True" else negated_statement
             candidate = {
                 **candidate,
-                "question_text": question_text,
+                "question_text": statement,
                 "correct_answer": answer,
             }
             if not validate_candidate(candidate, candidate["question_type"]):
@@ -1371,7 +1735,13 @@ def generate_questions(
             diagnostics["too_similar"] += 1
             continue
         accepted.append(candidate)
-        accepted_answers.add(str(candidate["correct_answer"]).casefold())
+        if selected_option_set is not None:
+            accepted_option_sets.add(selected_option_set)
+            used_distractors.update(
+                choice.casefold()
+                for choice in candidate["choices"]
+                if choice.casefold() != candidate["correct_answer"].casefold()
+            )
         counts[candidate["topic"]] += 1
         previous.append(candidate["question_text"])
     return {
@@ -1384,7 +1754,10 @@ def generate_questions(
                 {
                     "low_confidence_unclassified": diagnostics["low_confidence_unclassified"],
                     "skipped_low_confidence": diagnostics["below_topic_relevance"],
-                    "no_valid_distractors": diagnostics["no_valid_distractors"],
+                    "no_valid_distractors": (
+                        diagnostics["no_valid_distractors"]
+                        + diagnostics["not_enough_distinct_distractors"]
+                    ),
                 }
                 if lesson_mode else {}
             ),

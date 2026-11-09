@@ -1,4 +1,4 @@
 {
-  "version": "2.0.1",
-  "changelog": "Local build; not yet published."
+  "version": "2.0.4",
+  "changelog": "Improved practice-question stems, choice formatting, distractor quality, and skip diagnostics."
 }

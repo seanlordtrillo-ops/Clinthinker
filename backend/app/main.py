@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -11,7 +12,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+import urllib.error
+import urllib.parse
 import urllib.request
 from collections import OrderedDict
 from datetime import datetime, timezone
@@ -44,14 +48,14 @@ from .parsing import MAX_UPLOAD_BYTES, extract_lesson_features, extract_text, re
 from .questions import (
     DEFAULT_PRIORITY_WEIGHTS,
     DEFAULT_SIMILARITY_THRESHOLD,
-    extract_exam_stem_templates,
+    extract_exam_question_patterns,
     generate_questions,
     question_preference_features,
     rank_lesson_likelihood,
 )
 
 APP_NAME = "Clinthinker©"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.4"
 UPDATE_MANIFEST_URL = "https://seanlordtrillo-ops.github.io/Clinthinker/version.json"
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 app.add_middleware(
@@ -91,6 +95,10 @@ class PredictionRequest(BaseModel):
 class LabeledUpload(BaseModel):
     upload_id: str = Field(min_length=1, max_length=100)
     topic: str = Field(min_length=1, max_length=100)
+
+
+class UploadExamUpdate(BaseModel):
+    is_exam: bool
 
 
 class EvaluateDatasetRequest(BaseModel):
@@ -173,7 +181,12 @@ class RenameSavedSessionRequest(BaseModel):
 
 
 _question_batches: OrderedDict[str, dict] = OrderedDict()
-_MAX_QUESTION_BATCHES = 8
+# Each batch holds source text, so memory use scales with this cap.
+_MAX_QUESTION_BATCHES = 25
+_QUESTION_BATCH_UNAVAILABLE_DETAIL = (
+    "This practice set is no longer available (the app was restarted or newer sets "
+    "replaced it). Generate the questions again to save them or reveal the answer key."
+)
 
 
 def _analyze(request: PredictionRequest, progress_callback=None) -> dict:
@@ -267,14 +280,125 @@ def _fetch_update_manifest() -> dict:
 
 
 def _valid_installer_url(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return False
+    path_parts = parsed.path.split("/")
     return (
-        isinstance(value, str)
-        and value.startswith("https://github.com/seanlordtrillo-ops/Clinthinker/")
+        parsed.scheme == "https"
+        and parsed.netloc == "github.com"
+        and len(path_parts) == 7
+        and path_parts[:5]
+        == ["", "seanlordtrillo-ops", "Clinthinker", "releases", "download"]
+        and bool(path_parts[5])
+        and bool(path_parts[6])
+        and not parsed.query
+        and not parsed.fragment
     )
 
 
 def _valid_sha256(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[a-fA-F0-9]{64}", value) is not None
+
+
+def _github_asset_api_url(installer_url: str) -> str:
+    parsed = urllib.parse.urlsplit(installer_url)
+    path_parts = parsed.path.split("/")
+    if (
+        len(path_parts) != 7
+        or path_parts[:5]
+        != ["", "seanlordtrillo-ops", "Clinthinker", "releases", "download"]
+        or not path_parts[5]
+        or not path_parts[6]
+    ):
+        raise ValueError("The installer URL is not a GitHub release asset URL.")
+
+    tag = urllib.parse.unquote(path_parts[5])
+    asset_name = urllib.parse.unquote(path_parts[6])
+    release_url = (
+        "https://api.github.com/repos/seanlordtrillo-ops/Clinthinker/releases/tags/"
+        + urllib.parse.quote(tag, safe="")
+    )
+    request = urllib.request.Request(
+        release_url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Clinthinker",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        release = json.loads(response.read().decode("utf-8"))
+    if not isinstance(release, dict):
+        raise ValueError("Invalid GitHub release response.")
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise ValueError("The GitHub release does not contain assets.")
+    for asset in assets:
+        if (
+            isinstance(asset, dict)
+            and asset.get("name") == asset_name
+            and isinstance(asset.get("id"), int)
+            and not isinstance(asset.get("id"), bool)
+        ):
+            return (
+                "https://api.github.com/repos/seanlordtrillo-ops/Clinthinker/"
+                f"releases/assets/{asset['id']}"
+            )
+    raise ValueError("The installer was not found in the GitHub release.")
+
+
+def _download_update_asset(asset_url: str, installer_path: Path) -> None:
+    installer_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_path = installer_path.with_suffix(installer_path.suffix + ".part")
+    last_error = None
+    for attempt in range(4):
+        offset = partial_path.stat().st_size if partial_path.exists() else 0
+        headers = {
+            "Accept": "application/octet-stream",
+            "User-Agent": "Clinthinker",
+        }
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        request = urllib.request.Request(asset_url, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                response_headers = getattr(response, "headers", {})
+                content_range = response_headers.get("Content-Range", "")
+                resume = (
+                    offset > 0
+                    and getattr(response, "status", None) == 206
+                    and content_range.startswith(f"bytes {offset}-")
+                )
+                mode = "ab" if resume else "wb"
+                if not resume:
+                    offset = 0
+                expected_length = response_headers.get("Content-Length")
+                expected_length = (
+                    int(expected_length) if expected_length is not None else None
+                )
+                received = 0
+                with partial_path.open(mode) as installer_file:
+                    while chunk := response.read(1024 * 1024):
+                        installer_file.write(chunk)
+                        received += len(chunk)
+                if expected_length is not None and received != expected_length:
+                    raise OSError("The installer download ended before completion.")
+            partial_path.replace(installer_path)
+            return
+        except (
+            http.client.HTTPException,
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+        ) as error:
+            last_error = error
+            if attempt < 3:
+                time.sleep(2**attempt)
+    raise OSError("The installer download failed after retries.") from last_error
 
 
 @app.get("/api/updates/check")
@@ -318,15 +442,16 @@ def install_update() -> dict:
         if sha256 is not None and not _valid_sha256(sha256):
             raise HTTPException(status_code=422, detail="The installer checksum is invalid.")
 
-        update_directory = Path(tempfile.mkdtemp(prefix="clinthinker-update-"))
-        installer_path = update_directory / "Clinthinker-Setup.exe"
+        update_directory = Path(tempfile.gettempdir()) / "clinthinker-updates"
+        installer_path = update_directory / f"Clinthinker-Setup-{manifest['version']}.exe"
         digest = hashlib.sha256()
-        with urllib.request.urlopen(installer_url, timeout=30) as response:
-            with installer_path.open("wb") as installer_file:
-                while chunk := response.read(64 * 1024):
-                    installer_file.write(chunk)
-                    digest.update(chunk)
+        asset_url = _github_asset_api_url(installer_url)
+        _download_update_asset(asset_url, installer_path)
+        with installer_path.open("rb") as installer_file:
+            while chunk := installer_file.read(1024 * 1024):
+                digest.update(chunk)
         if sha256 is not None and digest.hexdigest().casefold() != sha256.casefold():
+            installer_path.unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail="The installer checksum does not match.")
 
         if not database.DB_PATH.is_file():
@@ -408,10 +533,38 @@ async def upload_lesson(file: UploadFile = File(...)) -> dict:
 def list_uploads() -> list[dict]:
     with connect() as db:
         rows = db.execute(
-            "SELECT id, name, bytes, text_chars, uploaded_at FROM uploads "
+            "SELECT id, name, bytes, text_chars, uploaded_at, is_exam FROM uploads "
             "ORDER BY uploaded_at DESC"
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [
+        {
+            **dict(row),
+            "is_exam": None if row["is_exam"] is None else bool(row["is_exam"]),
+            "exam_auto": _is_exam_upload({"is_exam": None, "name": row["name"]}),
+        }
+        for row in rows
+    ]
+
+
+def _is_exam_upload(row) -> bool:
+    if row["is_exam"] is not None:
+        return bool(row["is_exam"])
+    return (
+        Path(row["name"]).suffix.lower() in {".pdf", ".docx", ".txt"}
+        and re.search(r"(?:^|[_\s-])exam(?:[_\s.-]|$)", row["name"], re.I) is not None
+    )
+
+
+@app.put("/api/uploads/{upload_id}/exam")
+def update_upload_exam(upload_id: str, request: UploadExamUpdate) -> dict:
+    with connect() as db:
+        cursor = db.execute(
+            "UPDATE uploads SET is_exam=? WHERE id=?",
+            (int(request.is_exam), upload_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Uploaded file not found.")
+    return {"id": upload_id, "is_exam": request.is_exam}
 
 
 @app.get("/api/training-datasets")
@@ -501,6 +654,12 @@ def evaluate_training_dataset(request: EvaluateDatasetRequest) -> dict:
         **report,
         "training_dataset_id": request.training_dataset_id,
         "training_dataset_name": dataset_name,
+        "calibration_saved": True,
+        "decision_policy": {
+            "confidence_threshold": policy["confidence_threshold"],
+            "min_margin": policy["min_margin"],
+            "disagreement_abstain": policy["disagreement_abstain"],
+        },
     }
 
 
@@ -621,7 +780,7 @@ async def import_training_csv(
     except csv.Error as error:
         raise HTTPException(status_code=422, detail="Could not parse the CSV rows.") from error
     _validate_training_examples(examples)
-    dataset_name = (name or Path(filename).stem).strip()
+    dataset_name = (name or "").strip() or Path(filename).stem.strip()
     if not dataset_name:
         raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
     return _save_training_dataset(dataset_name, "csv", examples)
@@ -629,6 +788,9 @@ async def import_training_csv(
 
 @app.post("/api/training-datasets/documents")
 def create_document_dataset(request: DocumentDatasetRequest) -> dict:
+    dataset_name = request.name.strip()
+    if not dataset_name:
+        raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
     if len({example.upload_id for example in request.examples}) != len(request.examples):
         raise HTTPException(status_code=422, detail="Select each document only once.")
     topics = {example.topic.strip() for example in request.examples if example.topic.strip()}
@@ -658,9 +820,6 @@ def create_document_dataset(request: DocumentDatasetRequest) -> dict:
             examples.append((text, item.topic))
             example_sources.append({"id": item.upload_id, "name": row["name"]})
     _validate_training_examples(examples)
-    dataset_name = request.name.strip()
-    if not dataset_name:
-        raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
     return _save_training_dataset(dataset_name, "documents", examples, example_sources)
 
 
@@ -839,7 +998,8 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
             upload_rows = []
             for upload_id in request.upload_ids:
                 upload = db.execute(
-                    "SELECT id, name, stored_path FROM uploads WHERE id=?", (upload_id,)
+                    "SELECT id, name, stored_path, is_exam FROM uploads WHERE id=?",
+                    (upload_id,),
                 ).fetchone()
                 if not upload:
                     raise HTTPException(status_code=404, detail="A selected course material was not found.")
@@ -900,14 +1060,13 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
         if lesson_ids:
             with connect() as db:
                 exam_rows = db.execute(
-                    "SELECT id, name, stored_path FROM uploads"
+                    "SELECT id, name, stored_path, is_exam FROM uploads"
                 ).fetchall()
             existing_upload_ids = set(lesson_ids)
             source_upload_rows.extend(
                 dict(row) for row in exam_rows
                 if row["id"] not in existing_upload_ids
-                and Path(row["name"]).suffix.lower() == ".pdf"
-                and re.search(r"(?:^|[_\s-])exam(?:[_\s.-]|$)", row["name"], re.I)
+                and _is_exam_upload(row)
             )
 
         sources = []
@@ -917,11 +1076,7 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
         exam_characters = 0
         for upload in source_upload_rows:
             is_lesson = upload["id"] in lesson_ids
-            is_exam = bool(
-                re.search(r"(?:^|[_\s-])exam(?:[_\s.-]|$)", upload["name"], re.I)
-                and Path(upload["name"]).suffix.lower() == ".pdf"
-                and not is_lesson
-            )
+            is_exam = _is_exam_upload(upload) and not is_lesson
             path = Path(upload["stored_path"]).resolve()
             if path.parent != UPLOADS.resolve():
                 raise HTTPException(status_code=500, detail="A saved course material could not be read.")
@@ -986,8 +1141,8 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                     decision_policy=decision_policy,
                 )
             )
-        style_templates = (
-            extract_exam_stem_templates(
+        exam_question_patterns = (
+            extract_exam_question_patterns(
                 exam_sources,
                 classifier_examples,
                 training_metrics,
@@ -1007,7 +1162,6 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
             dataset_name=dataset_name,
             sources=sources,
             lesson_mode=bool(lesson_ids),
-            style_templates=style_templates,
             training_metrics=training_metrics,
             saved_question_texts=saved_texts,
             preference_feedback=preference_feedback,
@@ -1024,7 +1178,7 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                 result["questions"],
                 lesson_text,
                 classifier_examples,
-                exam_sources=exam_sources,
+                exam_sources=exam_sources if request.use_exam_style else [],
                 recent_question_topics=recent_topics,
                 emphasized_terms=lesson_features["emphasized_terms"],
                 heading_terms=lesson_features["heading_terms"],
@@ -1045,7 +1199,7 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
             }
             result["style_reference_enabled"] = request.use_exam_style
             result["style_reference_files"] = len(exam_sources) if request.use_exam_style else 0
-            result["style_template_count"] = len(style_templates)
+            result["question_pattern_count"] = len(exam_question_patterns)
             lesson_names = [upload["name"] for upload in lesson_uploads]
             result["lesson_names"] = lesson_names
             result["lesson_name"] = lesson_names[0] if len(lesson_names) == 1 else None
@@ -1078,7 +1232,12 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
     public_result["questions"] = [
         {
             key: value for key, value in item.items()
-            if key not in {"correct_answer", "support_excerpt", "source_content"}
+            if key not in {
+                "correct_answer",
+                "support_excerpt",
+                "source_content",
+                "supported_statement",
+            }
         }
         for item in result["questions"]
     ]
@@ -1189,7 +1348,10 @@ def clear_question_feedback() -> dict:
 def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
     batch = _question_batches.get(request.generation_id)
     if not batch:
-        raise HTTPException(status_code=410, detail="Generate the questions again to reveal their answer key.")
+        raise HTTPException(
+            status_code=410,
+            detail=_QUESTION_BATCH_UNAVAILABLE_DETAIL,
+        )
     questions = {item["id"]: item for item in batch["result"]["questions"]}
     if not set(request.question_ids).issubset(questions):
         raise HTTPException(status_code=422, detail="The selected generated questions are invalid.")
@@ -1197,7 +1359,11 @@ def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
         "answers": {
             question_id: questions[question_id]["correct_answer"]
             for question_id in request.question_ids
-        }
+        },
+        "explanations": {
+            question_id: questions[question_id]["support_excerpt"]
+            for question_id in request.question_ids
+        },
     }
 
 
@@ -1207,7 +1373,7 @@ def save_practice_questions(request: SaveQuestionsRequest) -> dict:
     if not batch:
         raise HTTPException(
             status_code=410,
-            detail="This generated set is no longer available. Generate the questions again before saving.",
+            detail=_QUESTION_BATCH_UNAVAILABLE_DETAIL,
         )
     requested_ids = set(request.question_ids)
     questions = {item["id"]: item for item in batch["result"]["questions"]}
@@ -1347,6 +1513,11 @@ def delete_saved_session(session_id: str) -> dict:
         cursor = db.execute("DELETE FROM saved_sessions WHERE id=?", (session_id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Saved question session not found.")
+        db.execute(
+            "DELETE FROM question_feedback WHERE question_id IN "
+            "(SELECT id FROM generated_questions WHERE session_id=?)",
+            (session_id,),
+        )
         db.execute("DELETE FROM generated_questions WHERE session_id=?", (session_id,))
     return {"deleted": session_id}
 

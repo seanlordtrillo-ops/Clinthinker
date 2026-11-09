@@ -1,5 +1,6 @@
 param(
-  [switch]$SkipFrontendBuild
+  [switch]$SkipFrontendBuild,
+  [switch]$SkipLocalShortcuts
 )
 
 $ErrorActionPreference = "Stop"
@@ -169,40 +170,42 @@ try {
   Copy-Item -LiteralPath $webView2CachedInstaller `
     -Destination (Join-Path $prerequisitesDirectory $webView2InstallerName) -Force
 
-  $shell = New-Object -ComObject WScript.Shell
-  $desktopDirectory = [Environment]::GetFolderPath("Desktop")
-  $desktopShortcut = $shell.CreateShortcut((Join-Path $desktopDirectory "$appName.lnk"))
-  $desktopShortcut.TargetPath = $appExecutable
-  $desktopShortcut.WorkingDirectory = Split-Path -Parent $appExecutable
-  $desktopShortcut.IconLocation = "$appExecutable,0"
-  $desktopShortcut.Description = $appName
-  $desktopShortcut.Save()
+  if (-not $SkipLocalShortcuts) {
+    $shell = New-Object -ComObject WScript.Shell
+    $desktopDirectory = [Environment]::GetFolderPath("Desktop")
+    $desktopShortcut = $shell.CreateShortcut((Join-Path $desktopDirectory "$appName.lnk"))
+    $desktopShortcut.TargetPath = $appExecutable
+    $desktopShortcut.WorkingDirectory = Split-Path -Parent $appExecutable
+    $desktopShortcut.IconLocation = "$appExecutable,0"
+    $desktopShortcut.Description = $appName
+    $desktopShortcut.Save()
 
-  $oldDesktopShortcut = Join-Path $desktopDirectory "Topic Prediction Assistant.lnk"
-  if (Test-Path -LiteralPath $oldDesktopShortcut) {
-    Remove-Item -LiteralPath $oldDesktopShortcut -Force
-  }
+    $oldDesktopShortcut = Join-Path $desktopDirectory "Topic Prediction Assistant.lnk"
+    if (Test-Path -LiteralPath $oldDesktopShortcut) {
+      Remove-Item -LiteralPath $oldDesktopShortcut -Force
+    }
 
-  $programsDirectory = [Environment]::GetFolderPath("Programs")
-  $startMenuDirectory = Join-Path $programsDirectory $appName
-  New-Item -ItemType Directory -Path $startMenuDirectory -Force | Out-Null
-  $startMenuShortcut = $shell.CreateShortcut(
-    (Join-Path $startMenuDirectory "$appName.lnk")
-  )
-  $startMenuShortcut.TargetPath = $appExecutable
-  $startMenuShortcut.WorkingDirectory = Split-Path -Parent $appExecutable
-  $startMenuShortcut.IconLocation = "$appExecutable,0"
-  $startMenuShortcut.Description = $appName
-  $startMenuShortcut.Save()
+    $programsDirectory = [Environment]::GetFolderPath("Programs")
+    $startMenuDirectory = Join-Path $programsDirectory $appName
+    New-Item -ItemType Directory -Path $startMenuDirectory -Force | Out-Null
+    $startMenuShortcut = $shell.CreateShortcut(
+      (Join-Path $startMenuDirectory "$appName.lnk")
+    )
+    $startMenuShortcut.TargetPath = $appExecutable
+    $startMenuShortcut.WorkingDirectory = Split-Path -Parent $appExecutable
+    $startMenuShortcut.IconLocation = "$appExecutable,0"
+    $startMenuShortcut.Description = $appName
+    $startMenuShortcut.Save()
 
-  $oldStartMenuDirectory = Join-Path $programsDirectory "Topic Prediction Assistant"
-  $oldStartMenuShortcut = Join-Path $oldStartMenuDirectory "Topic Prediction Assistant.lnk"
-  if (Test-Path -LiteralPath $oldStartMenuShortcut) {
-    Remove-Item -LiteralPath $oldStartMenuShortcut -Force
-  }
-  if ((Test-Path -LiteralPath $oldStartMenuDirectory) `
-      -and -not (Get-ChildItem -LiteralPath $oldStartMenuDirectory -Force)) {
-    Remove-Item -LiteralPath $oldStartMenuDirectory
+    $oldStartMenuDirectory = Join-Path $programsDirectory "Topic Prediction Assistant"
+    $oldStartMenuShortcut = Join-Path $oldStartMenuDirectory "Topic Prediction Assistant.lnk"
+    if (Test-Path -LiteralPath $oldStartMenuShortcut) {
+      Remove-Item -LiteralPath $oldStartMenuShortcut -Force
+    }
+    if ((Test-Path -LiteralPath $oldStartMenuDirectory) `
+        -and -not (Get-ChildItem -LiteralPath $oldStartMenuDirectory -Force)) {
+      Remove-Item -LiteralPath $oldStartMenuDirectory
+    }
   }
 
   $installerCompileRoot = Join-Path $env:TEMP (
@@ -240,7 +243,12 @@ try {
   Write-Host "Setup installer created at:"
   Write-Host $setupInstaller
   Write-Host "The portable app folder includes the offline WebView2 installer."
-  Write-Host "Desktop and Start menu shortcuts were created."
+  if ($SkipLocalShortcuts) {
+    Write-Host "Local desktop and Start menu shortcuts were not changed."
+  }
+  else {
+    Write-Host "Desktop and Start menu shortcuts were created."
+  }
 }
 finally {
   Pop-Location

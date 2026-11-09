@@ -63,6 +63,7 @@ def initialize() -> None:
                 stored_path TEXT NOT NULL,
                 bytes INTEGER NOT NULL,
                 text_chars INTEGER NOT NULL,
+                is_exam INTEGER,
                 uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS analyses (
@@ -142,6 +143,11 @@ def initialize() -> None:
             );
             """
         )
+        upload_columns = {
+            row["name"] for row in db.execute("PRAGMA table_info(uploads)").fetchall()
+        }
+        if "is_exam" not in upload_columns:
+            db.execute("ALTER TABLE uploads ADD COLUMN is_exam INTEGER")
         question_columns = {
             row["name"] for row in db.execute("PRAGMA table_info(generated_questions)").fetchall()
         }

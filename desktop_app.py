@@ -186,6 +186,7 @@ def main() -> None:
             min_size=(780, 640),
             background_color="#100d0a",
         )
+        webview.settings["ALLOW_DOWNLOADS"] = True
         webview.start()
     finally:
         server.should_exit = True
