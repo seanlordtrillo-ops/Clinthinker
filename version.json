@@ -1,6 +1,6 @@
 {
-  "version": "2.0.3",
-  "changelog": "Describe what changed in 2.0.3.",
-  "installer_url": "https://github.com/seanlordtrillo-ops/Clinthinker/releases/download/v2.0.3/Clinthinker-Setup-2.0.3.exe",
-  "sha256": "be40e05affa668f1783dd5f370f51378b14e18f302e062f074274929bd593eec"
+  "version": "2.0.4",
+  "changelog": "Improved practice-question stems, choice formatting, distractor quality, and skip diagnostics.",
+  "installer_url": "https://github.com/seanlordtrillo-ops/Clinthinker/releases/download/v2.0.4/Clinthinker-Setup-2.0.4.exe",
+  "sha256": "FB29848D9DE830853072826E8192D11877A49C877A7A8405C80D17401965739C"
 }
