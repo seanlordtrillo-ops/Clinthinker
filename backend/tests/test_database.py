@@ -213,7 +213,8 @@ class DatabaseMigrationTests(unittest.TestCase):
                         "SELECT id, title, question_count FROM saved_sessions ORDER BY id"
                     ).fetchall()
                     questions = db.execute(
-                        "SELECT id, question_text, session_id FROM generated_questions ORDER BY id"
+                        "SELECT id, question_text, session_id, support_excerpt, "
+                        "question_direction FROM generated_questions ORDER BY id"
                     ).fetchall()
 
             self.assertEqual(len(sessions), 2)
@@ -228,6 +229,12 @@ class DatabaseMigrationTests(unittest.TestCase):
             )
             self.assertEqual(questions[0]["session_id"], questions[1]["session_id"])
             self.assertNotEqual(questions[1]["session_id"], questions[2]["session_id"])
+            self.assertTrue(
+                all(
+                    row["support_excerpt"] == "" and row["question_direction"] == ""
+                    for row in questions
+                )
+            )
 
     def test_rebases_uploaded_material_paths_after_storage_folder_rename(self):
         with tempfile.TemporaryDirectory() as temporary:

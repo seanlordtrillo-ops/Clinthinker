@@ -70,6 +70,11 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   }),
+  resetQuestionHistory: (uploadIds) => apiRequest("/api/questions/history/reset", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_ids: uploadIds })
+  }),
   saveQuestions: (generationId, questionIds) => apiRequest("/api/questions/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

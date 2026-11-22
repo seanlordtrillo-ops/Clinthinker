@@ -32,6 +32,12 @@ from app.questions import (
     topic_priority,
     validate_candidate,
 )
+from app.question_quality import (
+    clean_statement,
+    definition_record,
+    rank_distractors,
+    swap_false_statement,
+)
 
 TRAINING = [
     ("router routing packets network protocol connection", "Networking"),
@@ -289,8 +295,16 @@ class PracticeQuestionUnitTests(unittest.TestCase):
         false_question = next(
             item for item in true_false["questions"] if item["correct_answer"] == "False"
         )
-        self.assertIn(" not ", false_question["question_text"])
+        self.assertNotEqual(
+            false_question["question_text"], false_question["support_excerpt"]
+        )
+        self.assertTrue(validate_candidate(false_question, "True or False"))
         self.assertIn(false_question["support_excerpt"], false_question["source_content"])
+        if false_question.get("false_basis"):
+            self.assertIn(
+                false_question["false_basis"].casefold(),
+                false_question["source_content"].casefold(),
+            )
         self.assertIsNone(_negate_statement("The source does not define this term."))
         self.assertIsNone(_negate_statement("The source isn't available in this example."))
         self.assertEqual(
@@ -463,24 +477,10 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             )
 
         self.assertFalse(any(
-            item["correct_answer"].casefold() == "computer hardware"
+            item["question_type"] == "Multiple Choice"
+            and item["cited_passage"].casefold().startswith("computer hardware")
             for item in result["questions"]
         ))
-        self.assertTrue(any(
-            rejection["reason"] == "not_enough_distinct_distractors"
-            for rejection in result["diagnostics"]["rejections"]
-        ), repr(result["diagnostics"]))
-        self.assertEqual(
-            result["diagnostics"]["no_valid_distractors"],
-            sum(
-                rejection["count"]
-                for rejection in result["diagnostics"]["rejections"]
-                if rejection["reason"] in {
-                    "not_enough_distinct_distractors",
-                    "no_valid_distractors",
-                }
-            ),
-        )
 
     def test_identification_skips_definitions_without_a_natural_stem(self):
         lesson = (
@@ -687,6 +687,241 @@ class PracticeQuestionUnitTests(unittest.TestCase):
         self.assertGreater(result["diagnostics"]["source_sentence_count"], 0)
         self.assertTrue(result["diagnostics"]["rejections"])
 
+    def test_shortfall_explains_when_candidates_are_too_similar(self):
+        with patch("app.questions.is_duplicate", return_value=True):
+            result = self.generate("True or False", requested_count=2)
+        self.assertEqual(result["questions"], [])
+        self.assertIn("too similar", result["shortfall_reason"])
+        self.assertIn("threshold", result["shortfall_reason"])
+        self.assertIn("lesson files", result["shortfall_reason"])
+        self.assertIn("old saved questions", result["shortfall_reason"])
+
+    def test_allow_repeats_keeps_questions_available_across_three_runs(self):
+        source = {
+            "id": "repeat-lesson",
+            "name": "Repeat lesson",
+            "text": MATERIAL,
+            "kind": "lesson",
+        }
+        prior_run_questions = []
+        prior_run_excerpts = []
+        prior_run_forms = []
+        results = []
+        for _ in range(3):
+            result = self.generate(
+                sources=[source],
+                lesson_mode=True,
+                requested_count=2,
+                per_topic=2,
+                allow_repeats=True,
+                saved_question_texts=prior_run_questions,
+                used_excerpts=prior_run_excerpts,
+                used_question_forms=prior_run_forms,
+                random_seed=29,
+            )
+            self.assertTrue(result["questions"])
+            question_texts = [item["question_text"] for item in result["questions"]]
+            self.assertEqual(len(question_texts), len(set(question_texts)))
+            prior_run_questions.extend(question_texts)
+            prior_run_excerpts.extend(
+                item["support_excerpt"] for item in result["questions"]
+            )
+            prior_run_forms.extend(
+                (
+                    item["support_excerpt"],
+                    item["question_type"],
+                    item.get(
+                        "question_direction",
+                        "statement"
+                        if item["question_type"] == "True or False"
+                        else "definition_to_term",
+                    ),
+                )
+                for item in result["questions"]
+            )
+            results.append(result)
+        self.assertEqual(len(results), 3)
+
+    def test_fresh_excerpts_are_used_before_prior_excerpts(self):
+        source = {
+            "id": "instrument-lesson",
+            "name": "Instrument lesson",
+            "text": INSTRUMENT_LESSON,
+            "kind": "lesson",
+        }
+        used_excerpts = []
+        used_forms = []
+        generated_excerpts = []
+        for _ in range(3):
+            result = self.generate(
+                sources=[source],
+                lesson_mode=True,
+                requested_count=2,
+                per_topic=2,
+                used_excerpts=used_excerpts,
+                used_question_forms=used_forms,
+                allow_repeats=True,
+                random_seed=41,
+            )
+            self.assertEqual(len(result["questions"]), 2)
+            excerpts = [item["support_excerpt"] for item in result["questions"]]
+            self.assertTrue(set(excerpts).isdisjoint(used_excerpts))
+            generated_excerpts.extend(excerpts)
+            used_excerpts.extend(excerpts)
+            used_forms.extend(
+                (
+                    item["support_excerpt"],
+                    item["question_type"],
+                    item.get(
+                        "question_direction",
+                        "statement"
+                        if item["question_type"] == "True or False"
+                        else "definition_to_term",
+                    ),
+                )
+                for item in result["questions"]
+            )
+        self.assertEqual(len(generated_excerpts), len(set(generated_excerpts)))
+
+    def test_used_excerpts_are_ranked_by_use_count_then_oldest_use(self):
+        lesson_text = (
+            "Router is a device that forwards data packets between networks using routing tables. "
+            "Gateway is a device that connects separate networks and translates protocols. "
+            "Switch is a device that forwards data frames within a local network. "
+            "Firewall is a system that filters network traffic based on security rules. "
+            "Server is a computer that provides services to other computers over a network. "
+            "Protocol is a set of rules that governs communication between network devices."
+        )
+        source = {
+            "id": "ranked-lesson",
+            "name": "Ranked lesson",
+            "text": lesson_text,
+            "kind": "lesson",
+        }
+        excerpts = [
+            definition[1]
+            for sentence in lesson_text.split(". ")
+            if (definition := _definition(sentence.rstrip(".")))
+        ]
+        used_excerpts = [
+            {
+                "support_excerpt": excerpt,
+                "question_type": "True or False",
+                "question_direction": "statement",
+                "use_count": 3 if index < 3 else 1,
+                "last_used_at": (
+                    "2025-01-10T00:00:00Z"
+                    if index < 3 else f"2025-01-{index - 2:02d}T00:00:00Z"
+                ),
+            }
+            for index, excerpt in enumerate(excerpts)
+        ]
+        result = self.generate(
+            "True or False",
+            sources=[source],
+            lesson_mode=True,
+            requested_count=2,
+            per_topic=2,
+            used_excerpts=used_excerpts,
+            allow_repeats=False,
+            random_seed=81,
+        )
+        self.assertEqual(len(result["questions"]), 2, result["shortfall_reason"])
+        self.assertEqual(
+            {item["support_excerpt"] for item in result["questions"]},
+            {excerpts[3], excerpts[4]},
+        )
+
+    def test_exhausted_excerpts_start_a_new_question_variant(self):
+        source = {
+            "id": "instrument-lesson",
+            "name": "Instrument lesson",
+            "text": INSTRUMENT_LESSON,
+            "kind": "lesson",
+        }
+        excerpts = [
+            definition[1]
+            for sentence in INSTRUMENT_LESSON.split(". ")
+            if (definition := _definition(sentence.rstrip(".")))
+        ]
+        used_forms = [
+            (excerpt, "Multiple Choice", "definition_to_term")
+            for excerpt in excerpts
+        ]
+        repeated = self.generate(
+            sources=[source],
+            lesson_mode=True,
+            requested_count=2,
+            per_topic=2,
+            used_excerpts=excerpts,
+            used_question_forms=used_forms,
+            allow_repeats=False,
+            random_seed=43,
+        )
+        self.assertTrue(repeated["questions"])
+        self.assertTrue(
+            all(item["question_type"] == "True or False" for item in repeated["questions"])
+        )
+        self.assertNotIn("already been used", repeated["shortfall_reason"] or "")
+
+    def test_ten_runs_reuse_excerpts_only_after_fresh_sentences_and_vary_forms(self):
+        lesson_text = (
+            "Router is a device that forwards data packets between networks using routing tables. "
+            "Gateway is a device that connects separate networks and translates protocols. "
+            "Switch is a device that forwards data frames within a local network. "
+            "Firewall is a system that filters network traffic based on security rules. "
+            "Server is a computer that provides services to other computers over a network. "
+            "Protocol is a set of rules that governs communication between network devices."
+        )
+        source = {
+            "id": "small-lesson",
+            "name": "Small lesson",
+            "text": lesson_text,
+            "kind": "lesson",
+        }
+        history = []
+        first_seen = set()
+        signatures_by_excerpt = {}
+        for run in range(10):
+            result = self.generate(
+                "True or False",
+                sources=[source],
+                lesson_mode=True,
+                requested_count=2,
+                per_topic=2,
+                used_excerpts=history,
+                allow_repeats=False,
+                random_seed=100 + run,
+            )
+            questions = result["questions"]
+            self.assertEqual(len(questions), 2, result["shortfall_reason"])
+            excerpts = {item["support_excerpt"].casefold() for item in questions}
+            self.assertEqual(len(excerpts), 2)
+            if len(first_seen) < 6:
+                self.assertTrue(excerpts.isdisjoint(first_seen))
+                first_seen.update(excerpts)
+            for item in questions:
+                excerpt = " ".join(item["support_excerpt"].casefold().split())
+                signature = (
+                    item["question_text"].casefold(),
+                    item["question_type"].casefold(),
+                    item.get("question_direction", "").casefold(),
+                    tuple(sorted(choice.casefold() for choice in item["choices"])),
+                )
+                self.assertNotIn(signature, signatures_by_excerpt.setdefault(excerpt, set()))
+                signatures_by_excerpt[excerpt].add(signature)
+                history.append({
+                    "support_excerpt": item["support_excerpt"],
+                    "question_text": item["question_text"],
+                    "question_type": item["question_type"],
+                    "question_direction": item.get("question_direction", ""),
+                    "choices": item["choices"],
+                    "correct_answer": item["correct_answer"],
+                    "use_count": 1,
+                    "last_used_at": f"2025-01-{run + 1:02d}T00:00:00Z",
+                })
+        self.assertEqual(len(first_seen), 6)
+
     def test_multiple_choice_distractors_are_distinct_and_defined_in_selected_sources(self):
         result = self.generate()
         defined_terms = {
@@ -719,9 +954,125 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             requested_count=1,
             per_topic=1,
         )
+        self.assertEqual(len(result["questions"]), 1)
+        self.assertEqual(result["questions"][0]["question_type"], "True or False")
+        self.assertTrue(validate_candidate(result["questions"][0], "True or False"))
+
+    def test_unclassified_multiple_choice_uses_distractors_across_three_lessons(self):
+        lesson_texts = [
+            "Router is a device that forwards packets between connected networks.",
+            "Switch is a device that forwards frames within a local network segment.",
+            "Gateway is a device that connects separate networks across boundaries.",
+            "Firewall is a device that filters network traffic using security rules.",
+            "Modem is a device that converts digital signals for transmission.",
+            "Repeater is a device that regenerates signals across long distances.",
+        ]
+        sources = [
+            {
+                "id": f"lesson-{index}",
+                "name": f"Lesson {index}",
+                "text": text,
+                "kind": "lesson",
+            }
+            for index, text in enumerate(lesson_texts, 1)
+        ]
+        with patch(
+            "app.questions.predict_distributions",
+            side_effect=lambda texts, examples, **kwargs: [
+                [{"topic": "Networking", "confidence": 0.2}]
+                for _ in texts
+            ],
+        ):
+            result = self.generate(
+                sources=sources,
+                lesson_mode=True,
+                requested_count=3,
+                per_topic=3,
+            )
+        self.assertTrue(result["questions"])
+        self.assertTrue(
+            all(item["topic"] == "Unclassified" for item in result["questions"])
+        )
+        self.assertTrue(
+            all(
+                item["question_type"] == "Multiple Choice"
+                and len(item["choices"]) == 4
+                and validate_candidate(item, "Multiple Choice")
+                for item in result["questions"]
+            )
+        )
+
+    def test_clean_statement_rejects_definition_fragments(self):
+        self.assertIsNone(
+            clean_statement(
+                "Four major building blocks is associated with hardware, software, data, and peopleware"
+            )
+        )
+        self.assertIsNone(
+            clean_statement("Addressing this divide is associated with essential for inclusive development")
+        )
+
+    def test_false_statement_swaps_in_a_grounded_explanation(self):
+        source = definition_record(
+            "Router is a device that forwards data packets between networks using routing tables."
+        )
+        borrowed = definition_record(
+            "Switch is a device that forwards frames within a local network segment."
+        )
+        self.assertIsNotNone(source)
+        self.assertIsNotNone(borrowed)
+        swapped = swap_false_statement(source, [source, borrowed])
+        self.assertIsNotNone(swapped)
+        false_statement, false_basis = swapped
+        self.assertEqual(
+            false_statement,
+            "Router is a device that forwards frames within a local network segment.",
+        )
+        self.assertEqual(false_basis, borrowed["explanation"])
+        self.assertTrue(clean_statement(false_statement))
+        self.assertNotIn(source["term"].casefold(), false_basis.casefold())
+
+    def test_distractor_ranking_prefers_similar_term_shape_and_deduplicates(self):
+        ranked = rank_distractors(
+            "Router",
+            [
+                {"term": "Access point", "explanation": "a network device"},
+                {"term": "Hub", "explanation": "a network device"},
+                {"term": "Switch", "explanation": "a network device"},
+                {"term": " switch ", "explanation": "a duplicate term"},
+                {"term": "router", "explanation": "the answer"},
+            ],
+        )
+        self.assertEqual(
+            [record["term"].strip() for record in ranked],
+            ["Switch", "Hub", "Access point"],
+        )
+
+    def test_unclean_sentence_rejection_is_counted(self):
+        malformed = (
+            "Four major building blocks is associated with hardware, software, data, and peopleware."
+        )
+        with patch(
+            "app.questions.predict_distributions",
+            side_effect=lambda texts, examples, **kwargs: [
+                [{"topic": "Networking", "confidence": 0.2}]
+                for _ in texts
+            ],
+        ):
+            result = self.generate(
+                question_type="True or False",
+                sources=[{
+                    "id": "lesson-fragment",
+                    "name": "Fragment lesson",
+                    "text": malformed,
+                    "kind": "lesson",
+                }],
+                lesson_mode=True,
+                requested_count=1,
+            )
         self.assertEqual(result["questions"], [])
         self.assertIn(
-            {"reason": "not_enough_distinct_distractors", "count": 1},
+            {"reason": "unclean_sentence", "count": 1},
             result["diagnostics"]["rejections"],
         )
 
@@ -1110,7 +1461,7 @@ class PracticeQuestionApiTests(unittest.TestCase):
         self.assertEqual(material_response.status_code, 200, material_response.text)
         return dataset_response.json(), material_response.json()
 
-    def generate_lesson_questions(self, dataset, lesson):
+    def generate_lesson_questions(self, dataset, lesson, *, allow_repeats=False):
         return self.client.post(
             "/api/questions/generate",
             json={
@@ -1122,8 +1473,289 @@ class PracticeQuestionApiTests(unittest.TestCase):
                 "difficulty": "Moderate",
                 "number_of_questions": 2,
                 "questions_per_topic": 2,
+                "allow_repeats": allow_repeats,
             },
         )
+
+    def test_saved_duplicate_history_is_limited_to_selected_lessons(self):
+        dataset, _ = self.create_dataset_and_material()
+        lessons = []
+        for index, name in enumerate(("selected.txt", "other.txt")):
+            lesson_text = MATERIAL + (
+                " Network routing connects separate networks."
+                if index else ""
+            )
+            uploaded = self.client.post(
+                "/api/lessons/upload",
+                files={"file": (name, lesson_text.encode(), "text/plain")},
+            )
+            self.assertEqual(uploaded.status_code, 200, uploaded.text)
+            lessons.append(uploaded.json())
+        with database.connect() as db:
+            for index, lesson in enumerate(lessons):
+                db.execute(
+                    "INSERT INTO generated_questions("
+                    "id, question_text, question_type, topic, difficulty, choices, "
+                    "correct_answer, priority_score, confidence_score, source_dataset_id, "
+                    "source_dataset_name, source_material_id, source_material_name, source_reference"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        f"saved-{index}",
+                        f"Previously saved question {index}?",
+                        "Identification",
+                        "Networking",
+                        "Moderate",
+                        "[]",
+                        "Router",
+                        0.5,
+                        0.9,
+                        dataset["id"],
+                        "study",
+                        lesson["id"],
+                        lesson["name"],
+                        f"Source Material: {lesson['name']}",
+                    ),
+                )
+        main._question_batches["unsaved"] = {
+            "result": {"questions": [{"question_text": "Unsaved earlier batch?"}]},
+            "upload_ids": [lessons[0]["id"]],
+        }
+        captured = {}
+
+        def capture_generation(**kwargs):
+            captured.update(kwargs)
+            return {"questions": []}
+
+        with patch.object(main, "generate_questions", side_effect=capture_generation), patch.object(
+            main, "rank_lesson_likelihood", return_value={}
+        ):
+            response = self.generate_lesson_questions(
+                dataset, lessons[0], allow_repeats=True
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            captured["saved_question_texts"],
+            ["Previously saved question 0?"],
+        )
+        self.assertTrue(captured["allow_repeats"])
+
+    def test_unsaved_batch_only_adds_excerpt_novelty_history(self):
+        dataset, _ = self.create_dataset_and_material()
+        lesson_text = INSTRUMENT_LESSON
+        uploaded = self.client.post(
+            "/api/lessons/upload",
+            files={"file": ("instruments.txt", lesson_text.encode(), "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        lesson = uploaded.json()
+        saved_excerpt = "an instrument used to measure voltage, current, and resistance"
+        used_excerpt = "an instrument used to display electrical signals as waveforms"
+        with database.connect() as db:
+            db.execute(
+                "INSERT INTO generated_questions("
+                "id, question_text, question_type, topic, difficulty, choices, "
+                "correct_answer, priority_score, confidence_score, source_dataset_id, "
+                "source_dataset_name, source_material_id, source_material_name, "
+                "source_reference, support_excerpt, question_direction"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "saved-novelty",
+                    "Saved previous question stem?",
+                    "Multiple Choice",
+                    "Networking",
+                    "Moderate",
+                    "[]",
+                    "Router",
+                    0.5,
+                    0.9,
+                    dataset["id"],
+                    "study",
+                    lesson["id"],
+                    lesson["name"],
+                    f"Source Material: {lesson['name']}",
+                    saved_excerpt,
+                    "definition_to_term",
+                ),
+            )
+        main._question_batches["unsaved"] = {
+            "result": {
+                "questions": [{
+                    "question_text": "Unsaved previous question stem?",
+                    "question_type": "Multiple Choice",
+                    "support_excerpt": used_excerpt,
+                    "question_direction": "definition_to_term",
+                }]
+            },
+            "upload_ids": [lesson["id"]],
+        }
+        captured = {}
+
+        def capture_generation(**kwargs):
+            captured.update(kwargs)
+            return {"questions": []}
+
+        with patch.object(main, "generate_questions", side_effect=capture_generation), patch.object(
+            main, "rank_lesson_likelihood", return_value={}
+        ):
+            response = self.generate_lesson_questions(dataset, lesson, allow_repeats=True)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn(
+            "Unsaved previous question stem?",
+            captured["saved_question_texts"],
+        )
+        self.assertEqual(
+            captured["saved_question_texts"],
+            ["Saved previous question stem?"],
+        )
+        captured_excerpts = {
+            item["support_excerpt"] for item in captured["used_excerpts"]
+        }
+        self.assertIn(saved_excerpt, captured_excerpts)
+        self.assertIn(used_excerpt, captured_excerpts)
+        self.assertIn(
+            (saved_excerpt, "Multiple Choice", "definition_to_term"),
+            captured["used_question_forms"],
+        )
+        self.assertIn(
+            (used_excerpt, "Multiple Choice", "definition_to_term"),
+            captured["used_question_forms"],
+        )
+
+    def test_only_the_three_most_recent_overlapping_batches_add_novelty_history(self):
+        dataset, _ = self.create_dataset_and_material()
+        uploaded = self.client.post(
+            "/api/lessons/upload",
+            files={"file": ("instruments.txt", INSTRUMENT_LESSON.encode(), "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        lesson = uploaded.json()
+        other_uploaded = self.client.post(
+            "/api/lessons/upload",
+            files={"file": ("other.txt", MATERIAL.encode(), "text/plain")},
+        )
+        self.assertEqual(other_uploaded.status_code, 200, other_uploaded.text)
+        other_lesson = other_uploaded.json()
+        for index in range(4):
+            excerpt = f"historic excerpt {index}"
+            main._question_batches[f"batch-{index}"] = {
+                "result": {"questions": [{
+                    "id": f"question-{index}",
+                    "question_text": f"Question stem {index}?",
+                    "question_type": "Multiple Choice",
+                    "question_direction": "definition_to_term",
+                    "support_excerpt": excerpt,
+                    "choices": [f"Answer {index}"],
+                    "correct_answer": f"Answer {index}",
+                    "source_material_id": lesson["id"],
+                }]},
+                "upload_ids": [lesson["id"]],
+                "created_at": f"2025-01-0{index + 1}T00:00:00+00:00",
+                "saved_question_ids": set(),
+                "novelty_excluded_source_ids": set(),
+            }
+        main._question_batches["batch-3"]["upload_ids"].append(other_lesson["id"])
+        main._question_batches["batch-3"]["result"]["questions"].append({
+            "id": "other-source-question",
+            "question_text": "Other source stem?",
+            "question_type": "Multiple Choice",
+            "question_direction": "definition_to_term",
+            "support_excerpt": "excerpt from unselected source",
+            "choices": ["A", "B", "C", "D"],
+            "correct_answer": "A",
+            "source_material_id": other_lesson["id"],
+        })
+        captured = {}
+
+        def capture_generation(**kwargs):
+            captured.update(kwargs)
+            return {"questions": []}
+
+        with patch.object(main, "generate_questions", side_effect=capture_generation), patch.object(
+            main, "rank_lesson_likelihood", return_value={}
+        ):
+            response = self.generate_lesson_questions(dataset, lesson, allow_repeats=True)
+
+        self.assertEqual(response.status_code, 200, response.text)
+        captured_excerpts = {
+            item["support_excerpt"] for item in captured["used_excerpts"]
+        }
+        self.assertEqual(
+            captured_excerpts,
+            {"historic excerpt 1", "historic excerpt 2", "historic excerpt 3"},
+        )
+        self.assertEqual(captured["saved_question_texts"], [])
+
+    def test_reset_clears_saved_and_unsaved_excerpt_history(self):
+        dataset, _ = self.create_dataset_and_material()
+        uploaded = self.client.post(
+            "/api/lessons/upload",
+            files={"file": ("instruments.txt", INSTRUMENT_LESSON.encode(), "text/plain")},
+        )
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        lesson = uploaded.json()
+        excerpt = "an instrument used to measure voltage, current, and resistance"
+        with database.connect() as db:
+            db.execute(
+                "INSERT INTO generated_questions("
+                "id, question_text, question_type, topic, difficulty, choices, "
+                "correct_answer, priority_score, confidence_score, source_dataset_id, "
+                "source_dataset_name, source_material_id, source_material_name, source_reference, "
+                "support_excerpt, question_direction"
+                ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "saved-before-reset", "Saved before reset?", "Multiple Choice",
+                    "Networking", "Moderate", "[]", "Router", 0.5, 0.9,
+                    dataset["id"], "study", lesson["id"], lesson["name"],
+                    f"Source Material: {lesson['name']}", excerpt, "definition_to_term",
+                ),
+            )
+        main._question_batches["unsaved-before-reset"] = {
+            "result": {"questions": [{
+                "id": "unsaved-question",
+                "question_text": "Unsaved before reset?",
+                "question_type": "Multiple Choice",
+                "question_direction": "definition_to_term",
+                "support_excerpt": "unsaved excerpt",
+                "source_material_id": lesson["id"],
+                "choices": ["A", "B", "C", "D"],
+                "correct_answer": "A",
+            }]},
+            "upload_ids": [lesson["id"]],
+            "saved_question_ids": set(),
+            "novelty_excluded_source_ids": set(),
+        }
+
+        response = self.client.post(
+            "/api/questions/history/reset",
+            json={"upload_ids": [lesson["id"]]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["reset_count"], 1)
+        with database.connect() as db:
+            row = db.execute(
+                "SELECT question_text, support_excerpt, question_direction "
+                "FROM generated_questions WHERE id='saved-before-reset'"
+            ).fetchone()
+        self.assertEqual(row["question_text"], "Saved before reset?")
+        self.assertEqual(row["support_excerpt"], "")
+        self.assertEqual(row["question_direction"], "")
+
+        captured = {}
+
+        def capture_generation(**kwargs):
+            captured.update(kwargs)
+            return {"questions": []}
+
+        with patch.object(main, "generate_questions", side_effect=capture_generation), patch.object(
+            main, "rank_lesson_likelihood", return_value={}
+        ):
+            generated = self.generate_lesson_questions(dataset, lesson, allow_repeats=True)
+
+        self.assertEqual(generated.status_code, 200, generated.text)
+        self.assertEqual(captured["used_excerpts"], [])
+        self.assertEqual(captured["saved_question_texts"], ["Saved before reset?"])
 
     def test_generation_conceals_answer_until_requested_and_saves_to_database(self):
         dataset, material = self.create_dataset_and_material()
@@ -1157,6 +1789,15 @@ class PracticeQuestionApiTests(unittest.TestCase):
             json={"generation_id": generated["generation_id"], "question_ids": [question_id]},
         )
         self.assertEqual(saved.status_code, 200, saved.text)
+        expected_excerpt = main._question_batches[generated["generation_id"]]["result"][
+            "questions"
+        ][0]["support_excerpt"]
+        with database.connect() as db:
+            saved_excerpt = db.execute(
+                "SELECT support_excerpt FROM generated_questions WHERE id=?",
+                (question_id,),
+            ).fetchone()["support_excerpt"]
+        self.assertEqual(saved_excerpt, expected_excerpt)
         public_saved = self.client.get("/api/questions/saved")
         self.assertEqual(public_saved.status_code, 200)
         sessions = public_saved.json()["sessions"]
@@ -1384,11 +2025,7 @@ class PracticeQuestionApiTests(unittest.TestCase):
         self.assertGreater(generated["question_pattern_count"], 0)
         self.assertIn("fit_seconds", generated["classifier_training"])
         self.assertGreater(generated["classifier_training"]["exam_passages_added"], 0)
-        self.assertEqual(generated["questions"], [])
-        self.assertTrue(any(
-            rejection["reason"] == "not_enough_distinct_distractors"
-            for rejection in generated["diagnostics"]["rejections"]
-        ))
+        self.assertTrue(generated["questions"])
         self.assertTrue(all(
             "this passage" not in item["question_text"].casefold()
             and item["cited_passage"].casefold() not in item["question_text"].casefold()

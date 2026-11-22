@@ -13,6 +13,7 @@
     "question_type": "Multiple Choice",
     "questions_per_topic": 3,
     "similarity_threshold": 0.82,
+    "allow_repeats": false,
     "topic": "All Topics",
     "training_dataset_id": "builtin",
     "upload_ids": null

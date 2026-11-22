@@ -16,6 +16,7 @@ const initialQuestionForm = {
   number_of_questions: 10,
   questions_per_topic: 3,
   similarity_threshold: 82,
+  allow_repeats: false,
   weights: { historical_frequency: 40, course_importance: 30, model_confidence: 20, recent_occurrence: 10 }
 };
 
@@ -557,6 +558,7 @@ export default function App() {
           number_of_questions: Number(questionForm.number_of_questions),
           questions_per_topic: Number(questionForm.questions_per_topic),
           similarity_threshold: Number(questionForm.similarity_threshold) / 100,
+          allow_repeats: Boolean(questionForm.allow_repeats),
           priority_weights: Object.fromEntries(
             Object.entries(questionForm.weights).map(([key, value]) => [key, Number(value) / 100])
           )
@@ -615,6 +617,7 @@ export default function App() {
         number_of_questions: Number(questionForm.number_of_questions),
         questions_per_topic: Number(questionForm.questions_per_topic),
         similarity_threshold: Number(questionForm.similarity_threshold) / 100,
+        allow_repeats: Boolean(questionForm.allow_repeats),
         priority_weights: Object.fromEntries(
           Object.entries(questionForm.weights).map(([key, value]) => [key, Number(value) / 100])
         )
@@ -869,6 +872,29 @@ export default function App() {
     }
   };
 
+  const resetQuestionHistory = async () => {
+    const selectedLessons = lessonUploads.filter((lesson) => lesson.status === "Ready");
+    if (!selectedLessons.length) return;
+    if (!window.confirm(
+      "Reset excerpt usage for the selected lessons? Saved questions will be kept."
+    )) return;
+    setError("");
+    setNotice("");
+    setQuestionBusy(true);
+    try {
+      await api.resetQuestionHistory(
+        selectedLessons.map((lesson) => lesson.id)
+      );
+      setNotice(
+        `Question history was reset for ${selectedLessons.length} lesson${selectedLessons.length === 1 ? "" : "s"}.`
+      );
+    } catch (resetError) {
+      setError(`Question history could not be reset: ${resetError.message}`);
+    } finally {
+      setQuestionBusy(false);
+    }
+  };
+
   const revealSavedAnswers = async (sessionIds = savedQuestions.map((session) => session.id)) => {
     const unloadedSessionIds = sessionIds.filter(
       (sessionId) => !savedAnswersLoadedSessions.includes(sessionId)
@@ -1111,6 +1137,7 @@ export default function App() {
           onRevealAnswers={revealGeneratedAnswers}
           onRateQuestion={rateQuestion}
           onResetPreferences={resetQuestionPreferences}
+          onResetQuestionHistory={resetQuestionHistory}
           onBack={() => setPage("Upload")}
           error={error}
           notice={notice}
@@ -1194,7 +1221,7 @@ function PracticeQuestionsPage({
   lessonUploadBusy, lessonProgress, useExamStyle, onChangeExamStyle, lessonUploadInput,
   onUploadLessons, onRemoveLesson, form, onOpenSettings,
   result, preferences, answers, explanations, busy, saved, questionSetUnavailable, onGenerate, onSave, onRevealAnswers,
-  onBack, error, notice, onRateQuestion, onResetPreferences
+  onBack, error, notice, onRateQuestion, onResetPreferences, onResetQuestionHistory
 }) {
   const [lessonDropActive, setLessonDropActive] = useState(false);
   const [questionSort, setQuestionSort] = useState("likelihood");
@@ -1234,6 +1261,7 @@ function PracticeQuestionsPage({
     candidate_validation_failed: "Failed source/answer validation",
     different_difficulty: "Did not match the selected difficulty",
     no_readable_words: "No readable words after text cleaning",
+    unclean_sentence: "Statement was incomplete or not a clean sentence",
     no_safe_negation: "No safe true/false negation could be formed",
     not_enough_distinct_distractors: "Not enough distinct source-defined answer choices",
     distractor_is_answer_in_set: "A distractor conflicted with another selected answer",
@@ -1339,6 +1367,14 @@ function PracticeQuestionsPage({
               : <span className="spinner" />}
           <span>{lessonProgress.message}</span>
         </div>}
+        {readyLessons.length > 0 && <button
+          className="button-outline"
+          type="button"
+          disabled={busy || lessonUploadBusy}
+          onClick={onResetQuestionHistory}
+        >
+          Reset question history for these lessons
+        </button>}
         <label className="lesson-style-toggle">
           <input type="checkbox" checked={useExamStyle} onChange={(event) => onChangeExamStyle(event.target.checked)} disabled={lessonUploadBusy || busy} />
           <span><strong>Use past exams for topic ranking</strong><small>Past exams inform likely-topic estimates, but question stems and answers come from your lesson material.</small></span>
@@ -2093,6 +2129,13 @@ function SettingsPage({
         <label className="question-control question-threshold"><span>Duplicate similarity threshold (%)</span>
           <input type="number" min="50" max="100" value={questionForm.similarity_threshold}
             onChange={(event) => setQuestionField("similarity_threshold", event.target.value)} />
+        </label>
+        <label className="question-repeat-toggle">
+          <input type="checkbox" checked={Boolean(questionForm.allow_repeats)}
+            onChange={(event) => setQuestionField("allow_repeats", event.target.checked)} />
+          <span><strong>Allow repeats from previous generations</strong>
+            <small>Questions can recur across runs, but fresh source sentences are always used first.</small>
+          </span>
         </label>
       </details>
       {weightTotal !== 100 && <p className="question-validation-note">Priority weights currently total {weightTotal}%. Adjust them to 100% before saving.</p>}

@@ -89,6 +89,7 @@
         "question_type": "string",
         "questions_per_topic": "integer",
         "similarity_threshold": "number",
+        "allow_repeats": "boolean",
         "topic": "string",
         "training_dataset_id": "string",
         "upload_ids": "null"

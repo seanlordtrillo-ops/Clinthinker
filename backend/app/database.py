@@ -47,6 +47,7 @@ DEFAULT_SETTINGS = {
         "number_of_questions": 10,
         "questions_per_topic": 3,
         "similarity_threshold": 0.82,
+        "allow_repeats": False,
         "priority_weights": {
             "historical_frequency": 0.40,
             "course_importance": 0.30,
@@ -143,7 +144,9 @@ def initialize() -> None:
                 source_material_name TEXT NOT NULL,
                 source_reference TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                session_id TEXT
+                session_id TEXT,
+                support_excerpt TEXT NOT NULL DEFAULT '',
+                question_direction TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS saved_sessions (
                 id TEXT PRIMARY KEY,
@@ -177,6 +180,16 @@ def initialize() -> None:
         }
         if "session_id" not in question_columns:
             db.execute("ALTER TABLE generated_questions ADD COLUMN session_id TEXT")
+        if "support_excerpt" not in question_columns:
+            db.execute(
+                "ALTER TABLE generated_questions "
+                "ADD COLUMN support_excerpt TEXT NOT NULL DEFAULT ''"
+            )
+        if "question_direction" not in question_columns:
+            db.execute(
+                "ALTER TABLE generated_questions "
+                "ADD COLUMN question_direction TEXT NOT NULL DEFAULT ''"
+            )
         _backfill_saved_sessions(db)
         example_columns = {
             row["name"] for row in db.execute("PRAGMA table_info(training_examples)").fetchall()

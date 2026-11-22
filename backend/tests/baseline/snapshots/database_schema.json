@@ -190,10 +190,26 @@
         "notnull": 0,
         "pk": 0,
         "type": "TEXT"
+      },
+      {
+        "cid": 16,
+        "dflt_value": "''",
+        "name": "support_excerpt",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 17,
+        "dflt_value": "''",
+        "name": "question_direction",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
       }
     ],
     "foreign_keys": [],
-    "sql": "CREATE TABLE generated_questions (\n                id TEXT PRIMARY KEY,\n                question_text TEXT NOT NULL,\n                question_type TEXT NOT NULL,\n                topic TEXT NOT NULL,\n                difficulty TEXT NOT NULL,\n                choices TEXT NOT NULL,\n                correct_answer TEXT NOT NULL,\n                priority_score REAL NOT NULL,\n                confidence_score REAL NOT NULL,\n                source_dataset_id TEXT NOT NULL,\n                source_dataset_name TEXT NOT NULL,\n                source_material_id TEXT,\n                source_material_name TEXT NOT NULL,\n                source_reference TEXT NOT NULL,\n                created_at TEXT NOT NULL DEFAULT (datetime('now')),\n                session_id TEXT\n            )"
+    "sql": "CREATE TABLE generated_questions (\n                id TEXT PRIMARY KEY,\n                question_text TEXT NOT NULL,\n                question_type TEXT NOT NULL,\n                topic TEXT NOT NULL,\n                difficulty TEXT NOT NULL,\n                choices TEXT NOT NULL,\n                correct_answer TEXT NOT NULL,\n                priority_score REAL NOT NULL,\n                confidence_score REAL NOT NULL,\n                source_dataset_id TEXT NOT NULL,\n                source_dataset_name TEXT NOT NULL,\n                source_material_id TEXT,\n                source_material_name TEXT NOT NULL,\n                source_reference TEXT NOT NULL,\n                created_at TEXT NOT NULL DEFAULT (datetime('now')),\n                session_id TEXT,\n                support_excerpt TEXT NOT NULL DEFAULT '',\n                question_direction TEXT NOT NULL DEFAULT ''\n            )"
   },
   "model_calibration": {
     "columns": [

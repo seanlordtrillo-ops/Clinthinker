@@ -355,6 +355,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .question-weights > p, .question-priority-breakdown > p { color: var(--muted); font-size: 9px; line-height: 1.55; }
 .question-weight-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 .question-threshold { max-width: 230px; margin-top: 10px; }
+.question-repeat-toggle { display: flex; align-items: flex-start; gap: 8px; max-width: 430px; margin-top: 12px; color: var(--text-soft); cursor: pointer; }
+.question-repeat-toggle input { flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--orange); }
+.question-repeat-toggle span { display: grid; gap: 3px; }
+.question-repeat-toggle strong { font-size: 9px; }
+.question-repeat-toggle small { color: var(--muted); font-size: 8px; line-height: 1.5; }
 .question-generate { width: 100%; min-height: 43px; margin-top: 13px; }
 .question-validation-note { margin: 8px 0 0; color: var(--orange-bright); font-size: 9px; }
 .question-results { margin-top: 19px; }

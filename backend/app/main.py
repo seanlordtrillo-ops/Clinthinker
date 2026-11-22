@@ -153,6 +153,7 @@ class QuestionGenerationSettings(BaseModel):
     number_of_questions: int = Field(default=10, ge=1, le=50)
     questions_per_topic: int = Field(default=3, ge=1, le=50)
     similarity_threshold: float = Field(default=DEFAULT_SIMILARITY_THRESHOLD, ge=0.5, le=1)
+    allow_repeats: bool = False
     priority_weights: PriorityWeights = Field(default_factory=PriorityWeights)
 
 
@@ -177,12 +178,17 @@ class GenerateQuestionsRequest(BaseModel):
     similarity_threshold: float = Field(
         default=DEFAULT_SIMILARITY_THRESHOLD, ge=0.5, le=1
     )
+    allow_repeats: bool = False
     priority_weights: PriorityWeights = Field(default_factory=PriorityWeights)
 
 
 class SaveQuestionsRequest(BaseModel):
     generation_id: str = Field(min_length=1, max_length=100)
     question_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class ResetQuestionHistoryRequest(BaseModel):
+    upload_ids: list[str] = Field(min_length=1)
 
 
 class QuestionFeedbackRequest(BaseModel):
@@ -1134,12 +1140,97 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                         status_code=500,
                         detail=f"Could not read lesson {lesson_upload['name']}: {error}",
                     ) from error
+            relevant_source_ids = lesson_ids or request.upload_ids
+            placeholders = ",".join("?" for _ in relevant_source_ids)
             saved_texts = [
                 row["question_text"]
                 for row in db.execute(
-                    "SELECT question_text FROM generated_questions"
+                    "SELECT question_text FROM generated_questions "
+                    f"WHERE source_material_id IN ({placeholders})",
+                    tuple(relevant_source_ids),
                 ).fetchall()
             ]
+            saved_excerpt_rows = db.execute(
+                "SELECT support_excerpt, question_type, question_direction, question_text, "
+                "choices, correct_answer, source_material_id, created_at "
+                "FROM generated_questions "
+                f"WHERE source_material_id IN ({placeholders}) "
+                "AND support_excerpt != ''",
+                tuple(relevant_source_ids),
+            ).fetchall()
+            used_excerpts = [
+                {
+                    "support_excerpt": row["support_excerpt"],
+                    "question_type": row["question_type"],
+                    "question_direction": row["question_direction"],
+                    "question_text": row["question_text"],
+                    "choices": json.loads(row["choices"]),
+                    "correct_answer": row["correct_answer"],
+                    "source_material_id": row["source_material_id"],
+                    "use_count": 1,
+                    "last_used_at": row["created_at"],
+                }
+                for row in saved_excerpt_rows
+            ]
+            used_question_forms = [
+                (
+                    row["support_excerpt"],
+                    row["question_type"],
+                    row["question_direction"]
+                    or (
+                        "statement"
+                        if row["question_type"] == "True or False"
+                        else "definition_to_term"
+                    ),
+                )
+                for row in saved_excerpt_rows
+            ]
+            recent_batches = [
+                batch for batch in reversed(_question_batches.values())
+                if set(batch.get("upload_ids", ())).intersection(relevant_source_ids)
+            ][:3]
+            for batch in recent_batches:
+                for item in batch.get("result", {}).get("questions", []):
+                    if item.get("id") in batch.get("saved_question_ids", set()):
+                        continue
+                    source_id = item.get("source_material_id")
+                    if source_id is not None and source_id not in relevant_source_ids:
+                        continue
+                    if source_id is None and not set(
+                        batch.get("upload_ids", ())
+                    ).issubset(relevant_source_ids):
+                        continue
+                    excluded_sources = batch.get("novelty_excluded_source_ids", set())
+                    if source_id in excluded_sources or (
+                        source_id is None
+                        and set(batch.get("upload_ids", ())).intersection(excluded_sources)
+                    ):
+                        continue
+                    excerpt = str(item.get("support_excerpt", "")).strip()
+                    if excerpt:
+                        used_excerpts.append({
+                            "support_excerpt": excerpt,
+                            "question_type": item.get("question_type", ""),
+                            "question_direction": item.get("question_direction", ""),
+                            "question_text": item.get("question_text", ""),
+                            "choices": item.get("choices", []),
+                            "correct_answer": item.get("correct_answer", ""),
+                            "source_material_id": source_id,
+                            "use_count": 1,
+                            "last_used_at": batch.get("created_at", ""),
+                        })
+                        used_question_forms.append(
+                            (
+                                excerpt,
+                                str(item.get("question_type", "")),
+                                str(item.get("question_direction", ""))
+                                or (
+                                    "statement"
+                                    if item.get("question_type") == "True or False"
+                                    else "definition_to_term"
+                                ),
+                            )
+                        )
             preference_feedback = [
                 dict(row)
                 for row in db.execute(
@@ -1147,11 +1238,6 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                     "FROM question_feedback"
                 ).fetchall()
             ]
-        saved_texts.extend(
-            item["question_text"]
-            for batch in _question_batches.values()
-            for item in batch["result"]["questions"]
-        )
         decision_policy = get_decision_policy(
             {"id": request.training_dataset_id, "examples": examples}
         )
@@ -1266,6 +1352,10 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
             saved_question_texts=saved_texts,
             preference_feedback=preference_feedback,
             similarity_threshold=request.similarity_threshold,
+            allow_repeats=request.allow_repeats,
+            used_excerpts=used_excerpts,
+            used_question_forms=used_question_forms,
+            random_seed=uuid.uuid4().int,
             priority_weights=request.priority_weights.model_dump(),
             decision_policy=decision_policy,
         )
@@ -1324,6 +1414,8 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
         ),
         "difficulty": request.difficulty,
         "question_type": request.question_type,
+        "saved_question_ids": set(),
+        "novelty_excluded_source_ids": set(),
     }
     _question_batches.move_to_end(generation_id)
     while len(_question_batches) > _MAX_QUESTION_BATCHES:
@@ -1337,6 +1429,11 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                 "support_excerpt",
                 "source_content",
                 "supported_statement",
+                "false_statement",
+                "false_basis",
+                "source_defined_terms",
+                "question_direction",
+                "_alternate_form",
             }
         }
         for item in result["questions"]
@@ -1444,6 +1541,39 @@ def clear_question_feedback() -> dict:
     return get_question_preferences()
 
 
+@app.post("/api/questions/history/reset")
+@checks(
+    expected="Question history reset",
+    probable_cause="Question history could not be reset",
+)
+def reset_question_history(request: ResetQuestionHistoryRequest) -> dict:
+    if len(set(request.upload_ids)) != len(request.upload_ids):
+        raise HTTPException(status_code=422, detail="Select each lesson only once.")
+    source_ids = set(request.upload_ids)
+    placeholders = ",".join("?" for _ in source_ids)
+    with connect() as db:
+        existing_ids = {
+            row["id"]
+            for row in db.execute(
+                f"SELECT id FROM uploads WHERE id IN ({placeholders})",
+                tuple(source_ids),
+            ).fetchall()
+        }
+        if existing_ids != source_ids:
+            raise HTTPException(status_code=404, detail="A selected lesson was not found.")
+        changed = db.execute(
+            "UPDATE generated_questions SET support_excerpt='', question_direction='' "
+            f"WHERE source_material_id IN ({placeholders}) "
+            "AND (support_excerpt != '' OR question_direction != '')",
+            tuple(source_ids),
+        ).rowcount
+    for batch in _question_batches.values():
+        matching_sources = source_ids.intersection(batch.get("upload_ids", ()))
+        if matching_sources:
+            batch.setdefault("novelty_excluded_source_ids", set()).update(matching_sources)
+    return {"reset_count": changed, "upload_ids": request.upload_ids}
+
+
 @app.post("/api/questions/answers")
 def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
     batch = _question_batches.get(request.generation_id)
@@ -1534,8 +1664,8 @@ def save_practice_questions(request: SaveQuestionsRequest) -> dict:
                     "id, question_text, question_type, topic, difficulty, choices, "
                     "correct_answer, priority_score, confidence_score, source_dataset_id, "
                     "source_dataset_name, source_material_id, source_material_name, source_reference, "
-                    "session_id"
-                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "session_id, support_excerpt, question_direction"
+                    ") VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         item["id"], item["question_text"], item["question_type"],
                         item["topic"], item["difficulty"], json.dumps(item["choices"]),
@@ -1544,6 +1674,18 @@ def save_practice_questions(request: SaveQuestionsRequest) -> dict:
                         item["source_material_id"], item["source_material_name"],
                         item["source_reference"],
                         request.generation_id,
+                        (
+                            ""
+                            if item.get("source_material_id")
+                            in batch.get("novelty_excluded_source_ids", set())
+                            else item["support_excerpt"]
+                        ),
+                        (
+                            ""
+                            if item.get("source_material_id")
+                            in batch.get("novelty_excluded_source_ids", set())
+                            else item.get("question_direction", "")
+                        ),
                     ),
                 )
             db.execute(
@@ -1552,6 +1694,7 @@ def save_practice_questions(request: SaveQuestionsRequest) -> dict:
                 ") WHERE id=?",
                 (request.generation_id, request.generation_id),
             )
+            batch.setdefault("saved_question_ids", set()).update(requested_ids)
     except HTTPException:
         raise
     except Exception as error:

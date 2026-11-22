@@ -359,6 +359,7 @@ class TrainingDatasetTests(unittest.TestCase):
                 "number_of_questions": 7,
                 "questions_per_topic": 2,
                 "similarity_threshold": 0.9,
+                "allow_repeats": True,
                 "priority_weights": {
                     "historical_frequency": 0.25,
                     "course_importance": 0.25,

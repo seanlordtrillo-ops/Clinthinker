@@ -3,8 +3,8 @@
     "header_lines_skipped": 0,
     "rejections": [
       {
-        "count": 3,
-        "reason": "not_enough_distinct_distractors"
+        "count": 1,
+        "reason": "per_topic_limit_reached"
       }
     ],
     "sentences_matching_filters": 3,
@@ -18,9 +18,58 @@
     "model_confidence": 0.2,
     "recent_occurrence": 0.1
   },
-  "questions": [],
+  "questions": [
+    {
+      "choices": [],
+      "cited_passage": "Router is a device that forwards data packets between networks using routing tables.",
+      "confidence_score": 0.8342,
+      "correct_answer": "False",
+      "created_at": null,
+      "difficulty": "Moderate",
+      "false_basis": "the process of selecting a path for data packets across interconnected networks",
+      "false_statement": "Router is the process of selecting a path for data packets across interconnected networks.",
+      "id": "00000000-0000-0000-0000-000000000001",
+      "lesson_order": 0,
+      "priority_score": 0.628,
+      "question_text": "Router is the process of selecting a path for data packets across interconnected networks.",
+      "question_type": "True or False",
+      "source_content": "Router is a device that forwards data packets between networks using routing tables. Routing is the process of selecting a path for data packets across interconnected networks. Network protocol is a formal set of rules that govern communication between devices.",
+      "source_dataset_id": "dataset-1",
+      "source_dataset_name": "Study set",
+      "source_material_id": "upload-1",
+      "source_material_name": "Networks lesson",
+      "source_reference": "Source Dataset: Study set\nSource Material: Networks lesson\nSource Topic: Networking\nSource Text/Reference: Router is a device that forwards data packets between networks using routing tables.",
+      "support_excerpt": "a device that forwards data packets between networks using routing tables",
+      "supported_statement": "When a packet must reach another network, a router forwards it along a route.",
+      "topic": "Networking"
+    },
+    {
+      "choices": [],
+      "cited_passage": "Routing is the process of selecting a path for data packets across interconnected networks.",
+      "confidence_score": 0.8093,
+      "correct_answer": "True",
+      "created_at": null,
+      "difficulty": "Moderate",
+      "false_basis": "a formal set of rules that govern communication between devices",
+      "false_statement": "Routing is a formal set of rules that govern communication between devices.",
+      "id": "00000000-0000-0000-0000-000000000002",
+      "lesson_order": 1,
+      "priority_score": 0.628,
+      "question_text": "Routing selects a path for a packet traveling across connected networks.",
+      "question_type": "True or False",
+      "source_content": "Router is a device that forwards data packets between networks using routing tables. Routing is the process of selecting a path for data packets across interconnected networks. Network protocol is a formal set of rules that govern communication between devices.",
+      "source_dataset_id": "dataset-1",
+      "source_dataset_name": "Study set",
+      "source_material_id": "upload-1",
+      "source_material_name": "Networks lesson",
+      "source_reference": "Source Dataset: Study set\nSource Material: Networks lesson\nSource Topic: Networking\nSource Text/Reference: Routing is the process of selecting a path for data packets across interconnected networks.",
+      "support_excerpt": "the process of selecting a path for data packets across interconnected networks",
+      "supported_statement": "Routing selects a path for a packet traveling across connected networks.",
+      "topic": "Networking"
+    }
+  ],
   "requested_count": 4,
-  "shortfall": 4,
+  "shortfall": 2,
   "shortfall_reason": "Not enough distinct, source-supported questions passed the quality checks.",
   "topic_priorities": [
     {
