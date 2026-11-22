@@ -1,4 +1,6 @@
 {
   "version": "2.0.5",
-  "changelog": "Improved practice-question stems, choice formatting, distractor quality, and skip diagnostics."
+  "changelog": "Improved practice-question stems, choice formatting, distractor quality, and skip diagnostics.",
+  "installer_url": "https://github.com/seanlordtrillo-ops/Clinthinker/releases/download/v2.0.5/Clinthinker-Setup-2.0.5.exe",
+  "sha256": "19862B95AD1EA861EA79955966E57AE291E76520606DC4850BD6C891BC55EB73"
 }
