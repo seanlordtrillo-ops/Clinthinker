@@ -1,0 +1,26 @@
+{
+  "modules": [
+    "app.database",
+    "app.main",
+    "app.ml",
+    "app.parsing",
+    "app.questions",
+    "app.core.checks",
+    "app.core.errors",
+    "app.core.logging_setup",
+    "app.services.updates",
+    "app.diagnostics"
+  ],
+  "functions": {
+    "app.database": ["connect", "initialize", "get_settings", "save_settings"],
+    "app.main": ["health", "check_for_updates", "install_update", "upload_material", "list_uploads", "update_upload_exam", "list_training_datasets", "evaluate_training_dataset", "list_training_topics", "create_document_dataset", "delete_training_dataset", "read_uploaded_text", "delete_upload", "predict_stream", "latest_analysis", "read_settings", "update_settings", "generate_practice_questions", "get_question_preferences", "save_question_feedback", "clear_question_feedback", "reveal_question_answers", "save_practice_questions", "list_saved_questions", "rename_saved_session", "delete_saved_session"],
+    "app.ml": ["clean_text", "dataset_hash", "get_decision_policy", "evaluate_classifier", "predict", "classify_with_policy", "augment_training_examples_with_exam_passages"],
+    "app.parsing": ["read_limited", "extract_text", "extract_lesson_features"],
+    "app.questions": ["generate_questions", "extract_exam_question_patterns", "rank_lesson_likelihood", "estimate_difficulty", "is_duplicate", "validate_candidate"],
+    "app.core.checks": ["checks"],
+    "app.core.errors": ["build_error_record"],
+    "app.core.logging_setup": ["get_data_directory", "setup_logging"],
+    "app.services.updates": ["_version_parts", "_fetch_update_manifest", "_valid_installer_url", "_valid_sha256", "_github_asset_api_url", "_download_update_asset"],
+    "app.diagnostics": ["check_database", "check_parsing", "check_ml", "check_questions", "check_updates", "check_uploads", "run_all"]
+  }
+}

@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-#define AppVersion "0.0.0"
+#define AppVersion "2.0.5"
 #endif
 
 [Setup]
@@ -34,3 +34,4 @@ Name: "{autodesktop}\Clinthinker"; Filename: "{app}\Clinthinker©.exe"; WorkingD
 
 [Run]
 Filename: "{app}\Clinthinker©.exe"; Description: "Launch Clinthinker"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\Clinthinker©.exe"; Flags: nowait; Check: WizardSilent

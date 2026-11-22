@@ -1,7 +1,9 @@
 import asyncio
 import io
 import json
+import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -9,7 +11,7 @@ from unittest.mock import patch
 from fastapi import HTTPException, UploadFile
 from fastapi.testclient import TestClient
 
-from app import database, main
+from app import database, main, ml
 
 
 class TrainingDatasetTests(unittest.TestCase):
@@ -83,6 +85,72 @@ class TrainingDatasetTests(unittest.TestCase):
         self.assertIn("'topic' and 'text'", error.exception.detail)
         self.assertEqual(len(main.list_training_datasets()), 1)
 
+    def test_csv_whitespace_name_falls_back_to_file_name(self):
+        self.with_isolated_storage()
+        uploaded = UploadFile(
+            filename="week3-topics.csv",
+            file=io.BytesIO(
+                b"topic,text\n"
+                b"Plants,photosynthesis chlorophyll plant energy\n"
+                b"Plants,plant leaves sunlight carbon dioxide\n"
+                b"Stars,orbit telescope star galaxy\n"
+                b"Stars,planet moon nebula telescope\n"
+            ),
+        )
+
+        dataset = asyncio.run(main.import_training_csv(uploaded, name="   \t "))
+
+        self.assertEqual(dataset["name"], "week3-topics")
+
+    def test_csv_dataset_save_runs_off_the_event_loop_thread(self):
+        self.with_isolated_storage()
+        uploaded = UploadFile(
+            filename="botany.csv",
+            file=io.BytesIO(
+                b"topic,text\n"
+                b"Botany,photosynthesis chlorophyll plant energy\n"
+                b"Botany,plant leaves sunlight carbon dioxide\n"
+                b"Astronomy,orbit telescope star galaxy\n"
+                b"Astronomy,planet moon nebula telescope\n"
+            ),
+        )
+        event_loop_thread = []
+        save_threads = []
+        save_training_dataset = main._save_training_dataset
+
+        def record_save_thread(*args, **kwargs):
+            save_threads.append(threading.get_ident())
+            return save_training_dataset(*args, **kwargs)
+
+        async def import_dataset():
+            event_loop_thread.append(threading.get_ident())
+            with patch.object(
+                main, "_save_training_dataset", side_effect=record_save_thread
+            ):
+                return await main.import_training_csv(uploaded, name=None)
+
+        dataset = asyncio.run(import_dataset())
+
+        self.assertEqual(len(save_threads), 1)
+        self.assertNotEqual(save_threads[0], event_loop_thread[0])
+        self.assertEqual(dataset["source_type"], "csv")
+
+    def test_document_dataset_rejects_whitespace_name(self):
+        self.with_isolated_storage()
+        with self.assertRaises(HTTPException) as error:
+            main.create_document_dataset(
+                main.DocumentDatasetRequest(
+                    name="   ",
+                    examples=[
+                        {"upload_id": "one", "topic": "Plants"},
+                        {"upload_id": "two", "topic": "Stars"},
+                    ],
+                )
+            )
+
+        self.assertEqual(error.exception.status_code, 422)
+        self.assertEqual(error.exception.detail, "Enter a name for this dataset.")
+
     def test_api_upload_select_and_prediction_round_trip(self):
         self.with_isolated_storage()
         content = (
@@ -110,6 +178,30 @@ class TrainingDatasetTests(unittest.TestCase):
             self.assertEqual(evaluation.status_code, 200, evaluation.text)
             self.assertEqual(evaluation.json()["training_dataset_name"], "custom")
             self.assertEqual(evaluation.json()["examples_evaluated"], 4)
+            self.assertEqual(len(evaluation.json()["threshold_sweep"]), 66)
+            self.assertTrue(evaluation.json()["calibration_saved"])
+            decision_policy = evaluation.json()["decision_policy"]
+            self.assertEqual(
+                set(decision_policy),
+                {"confidence_threshold", "min_margin", "disagreement_abstain"},
+            )
+            with database.connect() as db:
+                calibration = db.execute(
+                    "SELECT dataset_hash, confidence_threshold, min_margin, "
+                    "disagreement_abstain "
+                    "FROM model_calibration WHERE dataset_id=?",
+                    (dataset["id"],),
+                ).fetchone()
+            self.assertIsNotNone(calibration)
+            self.assertEqual(
+                decision_policy["confidence_threshold"],
+                calibration["confidence_threshold"],
+            )
+            self.assertEqual(decision_policy["min_margin"], calibration["min_margin"])
+            self.assertEqual(
+                decision_policy["disagreement_abstain"],
+                bool(calibration["disagreement_abstain"]),
+            )
 
             response = client.post(
                 "/api/predict/stream",
@@ -128,10 +220,106 @@ class TrainingDatasetTests(unittest.TestCase):
             result = json.loads(result_event)
             self.assertEqual(result["training_dataset_name"], "custom")
             self.assertEqual(result["predictions"][0]["topic"], "Botany")
+            for key in ("margin", "models_agree", "abstain_reason"):
+                self.assertIn(key, result)
+            for key in ("margin", "models_agree", "abstain_reason"):
+                self.assertIn(key, result["predictions"][0])
             self.assertEqual(
                 client.get("/api/analysis/latest").json()["training_dataset_id"],
                 dataset["id"],
             )
+            with database.connect() as db:
+                db.execute(
+                    "UPDATE training_examples SET text=? "
+                    "WHERE dataset_id=? AND rowid=("
+                    "SELECT MIN(rowid) FROM training_examples WHERE dataset_id=?"
+                    ")",
+                    ("changed training text", dataset["id"], dataset["id"]),
+                )
+                changed_rows = db.execute(
+                    "SELECT text, topic FROM training_examples "
+                    "WHERE dataset_id=? ORDER BY rowid",
+                    (dataset["id"],),
+                ).fetchall()
+            stale_policy = main.get_decision_policy(
+                {
+                    "id": dataset["id"],
+                    "examples": [(row["text"], row["topic"]) for row in changed_rows],
+                }
+            )
+            self.assertEqual(stale_policy, ml.LEGACY_DECISION_POLICY)
+            deleted = client.delete(f"/api/training-datasets/{dataset['id']}")
+            self.assertEqual(deleted.status_code, 200, deleted.text)
+            with database.connect() as db:
+                self.assertIsNone(
+                    db.execute(
+                        "SELECT dataset_id FROM model_calibration WHERE dataset_id=?",
+                        (dataset["id"],),
+                    ).fetchone()
+                )
+            self.assertEqual(
+                client.get("/api/analysis/latest").json()["training_dataset_id"],
+                dataset["id"],
+            )
+
+    def test_predict_stream_hides_unexpected_analysis_errors(self):
+        self.with_isolated_storage()
+        errors = (
+            RuntimeError("runtime failure sentinel"),
+            sqlite3.OperationalError("database failure sentinel"),
+        )
+        expected_detail = "Analysis failed. Please try again."
+
+        with TestClient(main.app) as client:
+            for error in errors:
+                with self.subTest(error=type(error).__name__), patch.object(
+                    main, "_analyze", side_effect=error
+                ):
+                    response = client.post(
+                        "/api/predict/stream",
+                        json={"text": "test material"},
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                error_events = [
+                    frame
+                    for frame in response.text.strip().split("\n\n")
+                    if frame.startswith("event: error\n")
+                ]
+                self.assertEqual(len(error_events), 1)
+                data = next(
+                    line.removeprefix("data: ")
+                    for line in error_events[0].splitlines()
+                    if line.startswith("data: ")
+                )
+                self.assertEqual(json.loads(data), {"detail": expected_detail})
+                self.assertNotIn(str(error), response.text)
+                self.assertNotIn("Traceback", response.text)
+
+    def test_predict_stream_preserves_value_error_message(self):
+        self.with_isolated_storage()
+        detail = "Original validation message."
+
+        with TestClient(main.app) as client, patch.object(
+            main, "_analyze", side_effect=ValueError(detail)
+        ):
+            response = client.post(
+                "/api/predict/stream",
+                json={"text": "test material"},
+            )
+
+        error_events = [
+            frame
+            for frame in response.text.strip().split("\n\n")
+            if frame.startswith("event: error\n")
+        ]
+        self.assertEqual(len(error_events), 1)
+        data = next(
+            line.removeprefix("data: ")
+            for line in error_events[0].splitlines()
+            if line.startswith("data: ")
+        )
+        self.assertEqual(json.loads(data), {"detail": detail})
 
     def test_appearance_setting_is_saved_and_validated(self):
         self.with_isolated_storage()
@@ -151,6 +339,16 @@ class TrainingDatasetTests(unittest.TestCase):
             self.assertEqual(
                 client.get("/api/settings").json()["appearance"],
                 "regal",
+            )
+            saved_cmu_appearance = client.put(
+                "/api/settings",
+                json={"appearance": "cmu"},
+            )
+            self.assertEqual(saved_cmu_appearance.status_code, 200)
+            self.assertEqual(saved_cmu_appearance.json()["appearance"], "cmu")
+            self.assertEqual(
+                client.get("/api/settings").json()["appearance"],
+                "cmu",
             )
             question_settings = {
                 "training_dataset_id": "builtin",

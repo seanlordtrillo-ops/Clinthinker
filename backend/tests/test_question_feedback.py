@@ -110,6 +110,59 @@ class QuestionFeedbackTests(unittest.TestCase):
             response.json()["learned_preferences"],
         )
 
+    def test_deleting_saved_session_removes_its_question_feedback(self):
+        question = {
+            "id": "saved-question",
+            "question_text": "Which concept is described by this passage?",
+            "question_type": "Multiple Choice",
+            "topic": "Networks",
+            "difficulty": "Moderate",
+            "choices": ["Router", "Switch", "Modem", "Hub"],
+            "correct_answer": "Router",
+            "priority_score": 0.5,
+            "confidence_score": 0.8,
+            "source_dataset_id": "builtin",
+            "source_dataset_name": "Built-in examples",
+            "source_material_id": "lesson-1",
+            "source_material_name": "lesson.txt",
+            "source_reference": "A router forwards packets between networks.",
+            "source_content": "A router forwards packets between networks.",
+            "support_excerpt": "A router forwards packets between networks.",
+        }
+        main._question_batches["session-feedback"] = {
+            "result": {"questions": [question]},
+            "dataset_id": "builtin",
+            "upload_ids": [],
+            "created_at": "2026-11-08T12:00:00+00:00",
+            "topic": "Networks",
+            "source_file": "lesson.txt",
+            "difficulty": "Moderate",
+            "question_type": "Multiple Choice",
+        }
+
+        saved = self.client.post(
+            "/api/questions/save",
+            json={
+                "generation_id": "session-feedback",
+                "question_ids": ["saved-question"],
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+
+        rated = self.client.post(
+            "/api/questions/feedback",
+            json={"question_id": "saved-question", "rating": 1},
+        )
+        self.assertEqual(rated.status_code, 200, rated.text)
+        self.assertEqual(rated.json()["ratings_recorded"], 1)
+
+        deleted = self.client.delete("/api/questions/sessions/session-feedback")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        preferences = self.client.get("/api/questions/preferences")
+        self.assertEqual(preferences.status_code, 200, preferences.text)
+        self.assertEqual(preferences.json()["ratings_recorded"], 0)
+        self.assertEqual(preferences.json()["learned_preferences"], [])
+
     def test_feedback_requires_existing_question_and_valid_rating(self):
         missing = self.client.post(
             "/api/questions/feedback",

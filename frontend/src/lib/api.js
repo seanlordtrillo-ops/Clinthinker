@@ -1,6 +1,18 @@
 const API_ROOT = window.location.origin;
 let startupUpdateCheck;
 
+export function formatApiError(detail, fallback) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => item?.msg)
+      .filter((message) => typeof message === "string")
+      .map((message) => message.replace(/^Value error, /, ""));
+    return messages.join("; ") || fallback;
+  }
+  return fallback;
+}
+
 async function apiRequest(path, options = {}) {
   let response;
   try {
@@ -14,11 +26,11 @@ async function apiRequest(path, options = {}) {
     let message = `Request failed (${response.status})`;
     try {
       const body = await response.json();
-      message = body.detail || message;
+      message = formatApiError(body.detail, message);
     } catch {
       // Keep the HTTP status message if the server did not return JSON.
     }
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: response.status });
   }
   return response.json();
 }
@@ -30,7 +42,10 @@ export const api = {
     return startupUpdateCheck;
   },
   checkForUpdates: () => apiRequest("/api/updates/check"),
-  installUpdate: () => apiRequest("/api/updates/install", { method: "POST" }),
+  installUpdate: () => apiRequest("/api/updates/install", {
+    method: "POST",
+    headers: { "X-Clinthinker-Request": "1" }
+  }),
   uploads: () => apiRequest("/api/uploads"),
   trainingDatasets: () => apiRequest("/api/training-datasets"),
   evaluateTrainingDataset: (trainingDatasetId) => apiRequest("/api/training-datasets/evaluate", {
@@ -94,6 +109,11 @@ export const api = {
     return apiRequest("/api/lessons/upload", { method: "POST", body: form });
   },
   savedMaterial: (id) => apiRequest(`/api/uploads/${encodeURIComponent(id)}/text`),
+  setUploadExam: (id, isExam) => apiRequest(`/api/uploads/${encodeURIComponent(id)}/exam`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_exam: isExam })
+  }),
   deleteUpload: (id) => apiRequest(`/api/uploads/${encodeURIComponent(id)}`, { method: "DELETE" }),
   importTrainingCsv: (file, name) => {
     const form = new FormData();
@@ -120,7 +140,7 @@ export const api = {
     }
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(body.detail || `Prediction failed (${response.status})`);
+      throw new Error(formatApiError(body.detail, `Prediction failed (${response.status})`));
     }
     if (!response.body) throw new Error("The local service did not provide prediction progress.");
     const reader = response.body.getReader();

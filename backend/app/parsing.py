@@ -23,6 +23,13 @@ async def read_limited(upload: UploadFile, maximum: int = MAX_UPLOAD_BYTES) -> b
     return content
 
 
+def _decode_plain_text(content: bytes) -> str:
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return content.decode("cp1252")
+
+
 def extract_text(filename: str, content: bytes) -> str:
     extension = Path(filename).suffix.lower()
     if extension not in ALLOWED_MATERIAL_TYPES:
@@ -31,10 +38,7 @@ def extract_text(filename: str, content: bytes) -> str:
         )
     try:
         if extension == ".txt":
-            try:
-                text = content.decode("utf-8-sig")
-            except UnicodeDecodeError:
-                text = content.decode("cp1252")
+            text = _decode_plain_text(content)
         elif extension == ".docx":
             from docx import Document
 
@@ -56,7 +60,12 @@ def extract_text(filename: str, content: bytes) -> str:
                 index for index, page_text in enumerate(page_texts)
                 if len(page_text.strip()) < OCR_MIN_PAGE_TEXT
             ]
-            if len(sparse_pages) > MAX_OCR_PAGES:
+            pages_need_ocr = bool(page_texts) and (
+                len(sparse_pages) == len(page_texts)
+                or len(sparse_pages) > len(page_texts) / 2
+            )
+            ocr_pages = sparse_pages if pages_need_ocr else []
+            if len(ocr_pages) > MAX_OCR_PAGES:
                 raise HTTPException(
                     status_code=413,
                     detail=(
@@ -64,14 +73,14 @@ def extract_text(filename: str, content: bytes) -> str:
                         "Split the document into smaller files and try again."
                     ),
                 )
-            if sparse_pages:
+            if ocr_pages:
                 import pypdfium2
                 import pytesseract
 
                 document = pypdfium2.PdfDocument(content)
                 try:
                     ocr = _get_ocr_engine(pytesseract)
-                    for index in sparse_pages:
+                    for index in ocr_pages:
                         image = document[index].render(scale=2).to_pil()
                         page_texts[index] = ocr.image_to_string(image, lang="eng")
                 finally:
@@ -126,10 +135,7 @@ def extract_lesson_features(filename: str, content: bytes) -> dict[str, list[str
                     if line and normal_size and line_size >= normal_size * 1.15:
                         features["heading_terms"].append(line)
     else:
-        try:
-            text = content.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = content.decode("cp1252")
+        text = _decode_plain_text(content)
         for line in text.splitlines():
             stripped = line.strip()
             if re.match(r"^#{1,6}\s+", stripped) or (

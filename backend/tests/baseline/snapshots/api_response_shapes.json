@@ -1,0 +1,437 @@
+{
+  "GET /api/diagnostics": {
+    "shape": {
+      "checks": [
+        {
+          "detail": "string",
+          "name": "string",
+          "passed": "boolean"
+        }
+      ],
+      "passed": "boolean"
+    },
+    "status": 200
+  },
+  "DELETE /api/questions/feedback": {
+    "shape": {
+      "learned_preferences": [
+        "empty-list"
+      ],
+      "negative_ratings": "integer",
+      "positive_ratings": "integer",
+      "ratings_recorded": "integer"
+    },
+    "status": 200
+  },
+  "DELETE /api/questions/sessions/missing": {
+    "shape": {
+      "detail": "string"
+    },
+    "status": 404
+  },
+  "DELETE /api/training-datasets/missing": {
+    "shape": {
+      "detail": "string"
+    },
+    "status": 404
+  },
+  "DELETE /api/uploads/missing": {
+    "shape": {
+      "detail": "string"
+    },
+    "status": 404
+  },
+  "GET /api/analysis/latest": {
+    "shape": "null",
+    "status": 200
+  },
+  "GET /api/health": {
+    "shape": {
+      "ok": "boolean",
+      "service": "string",
+      "storage": "string",
+      "version": "string"
+    },
+    "status": 200
+  },
+  "GET /api/questions/preferences": {
+    "shape": {
+      "learned_preferences": [
+        "empty-list"
+      ],
+      "negative_ratings": "integer",
+      "positive_ratings": "integer",
+      "ratings_recorded": "integer"
+    },
+    "status": 200
+  },
+  "GET /api/questions/saved": {
+    "shape": {
+      "sessions": [
+        "empty-list"
+      ]
+    },
+    "status": 200
+  },
+  "GET /api/settings": {
+    "shape": {
+      "appearance": "string",
+      "language": "string",
+      "question_generation": {
+        "difficulty": "string",
+        "number_of_questions": "integer",
+        "priority_weights": {
+          "course_importance": "number",
+          "historical_frequency": "number",
+          "model_confidence": "number",
+          "recent_occurrence": "number"
+        },
+        "question_type": "string",
+        "questions_per_topic": "integer",
+        "similarity_threshold": "number",
+        "topic": "string",
+        "training_dataset_id": "string",
+        "upload_ids": "null"
+      }
+    },
+    "status": 200
+  },
+  "GET /api/training-datasets": {
+    "shape": [
+      {
+        "example_count": "integer",
+        "id": "string",
+        "name": "string",
+        "source_type": "string",
+        "topic_count": "integer",
+        "topics": [
+          "string"
+        ]
+      }
+    ],
+    "status": 200
+  },
+  "GET /api/training-datasets/builtin/topics": {
+    "shape": {
+      "topics": [
+        "string"
+      ]
+    },
+    "status": 200
+  },
+  "GET /api/updates/check": {
+    "shape": {
+      "available": "boolean"
+    },
+    "status": 200
+  },
+  "GET /api/uploads": {
+    "shape": [
+      "empty-list"
+    ],
+    "status": 200
+  },
+  "GET /api/uploads/missing/text": {
+    "shape": {
+      "detail": "string"
+    },
+    "status": 404
+  },
+  "POST /api/lessons/upload": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/predict/stream": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/questions/answers": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/questions/feedback": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/questions/generate": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/questions/save": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/training-datasets/csv": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/training-datasets/documents": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "POST /api/training-datasets/evaluate": {
+    "shape": {
+      "calibration": {
+        "ensemble_temperature": "number",
+        "reliability_bins": {
+          "ensemble": [
+            {
+              "accuracy": "null",
+              "count": "integer",
+              "lower": "number",
+              "mean_confidence": "null",
+              "upper": "number"
+            }
+          ],
+          "ensemble_calibrated": [
+            {
+              "accuracy": "null",
+              "count": "integer",
+              "lower": "number",
+              "mean_confidence": "null",
+              "upper": "number"
+            }
+          ]
+        },
+        "svm_temperature": "number"
+      },
+      "calibration_saved": "boolean",
+      "comparison": {
+        "ensemble": {
+          "accuracy": "number",
+          "brier_score": "number",
+          "expected_calibration_error": "number",
+          "log_loss": "number",
+          "macro_f1": "number"
+        },
+        "ensemble_calibrated": {
+          "accuracy": "number",
+          "brier_score": "number",
+          "expected_calibration_error": "number",
+          "log_loss": "number",
+          "macro_f1": "number"
+        },
+        "nb_only": {
+          "accuracy": "number",
+          "brier_score": "number",
+          "expected_calibration_error": "number",
+          "log_loss": "number",
+          "macro_f1": "number"
+        },
+        "svm_only": {
+          "accuracy": "number",
+          "brier_score": "number",
+          "expected_calibration_error": "number",
+          "log_loss": "number",
+          "macro_f1": "number"
+        }
+      },
+      "component_scores": {
+        "nb_only": {
+          "mean": "number",
+          "median": "number"
+        },
+        "svm_only": {
+          "mean": "number",
+          "median": "number"
+        }
+      },
+      "confusion_matrix": {
+        "labels": [
+          "string"
+        ],
+        "values": [
+          [
+            "integer"
+          ]
+        ]
+      },
+      "decision_policy": {
+        "confidence_threshold": "number",
+        "disagreement_abstain": "boolean",
+        "min_margin": "number"
+      },
+      "disagreement": {
+        "accuracy_when_agree": "number",
+        "accuracy_when_disagree": "null",
+        "agreement_count": "integer",
+        "agreement_rate": "number",
+        "disagreement_count": "integer"
+      },
+      "disclaimer": "string",
+      "examples_evaluated": "integer",
+      "examples_excluded": "integer",
+      "folds": "integer",
+      "low_reliability": "boolean",
+      "method": "string",
+      "metrics": {
+        "accuracy": "number",
+        "macro_f1": "number",
+        "macro_precision": "number",
+        "macro_recall": "number"
+      },
+      "threshold_sweep": [
+        {
+          "coverage": "number",
+          "precision": "number",
+          "threshold": "number"
+        }
+      ],
+      "topics": [
+        "string"
+      ],
+      "training_dataset_id": "string",
+      "training_dataset_name": "string",
+      "validation": "string",
+      "warnings": [
+        "string"
+      ]
+    },
+    "status": 200
+  },
+  "POST /api/updates/install": {
+    "shape": {
+      "detail": "string"
+    },
+    "status": 409
+  },
+  "POST /api/upload": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "PUT /api/questions/sessions/missing": {
+    "shape": {
+      "detail": [
+        {
+          "input": {},
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "PUT /api/settings": {
+    "shape": {
+      "detail": [
+        {
+          "input": "null",
+          "loc": [
+            "string"
+          ],
+          "msg": "string",
+          "type": "string"
+        }
+      ]
+    },
+    "status": 422
+  },
+  "PUT /api/uploads/missing/exam": {
+    "shape": {
+      "detail": "string"
+    },
+    "status": 404
+  }
+}

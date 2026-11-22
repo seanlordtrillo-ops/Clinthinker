@@ -3,52 +3,77 @@ from __future__ import annotations
 import asyncio
 import csv
 import hashlib
+import http.client
 import io
 import json
+import logging
 import os
 import re
-import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import uuid
+import urllib.error
+import urllib.parse
 import urllib.request
 from collections import OrderedDict
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from sklearn import __version__ as sklearn_version
 
 from . import database
 from .database import UPLOADS, connect, get_settings, initialize, save_settings
+from .core.checks import checks, suppress_check_exception_logging
+from .core import errors as _core_errors
+from .core import logging_setup as _core_logging_setup
+from . import diagnostics as _diagnostics
 from .ml import (
     BUILTIN_TRAINING_EXAMPLE_COUNT,
     BUILTIN_TRAINING_EXAMPLES,
     BUILTIN_TRAINING_TOPICS,
     PREDICTION_METHOD,
     augment_training_examples_with_exam_passages,
+    classify_with_policy,
+    dataset_hash,
     evaluate_classifier,
+    get_decision_policy,
     predict,
 )
 from .parsing import MAX_UPLOAD_BYTES, extract_lesson_features, extract_text, read_limited
 from .questions import (
     DEFAULT_PRIORITY_WEIGHTS,
     DEFAULT_SIMILARITY_THRESHOLD,
-    extract_exam_stem_templates,
+    extract_exam_question_patterns,
     generate_questions,
     question_preference_features,
     rank_lesson_likelihood,
 )
+from .services.updates import (
+    UPDATE_MANIFEST_URL,
+    _download_update_asset,
+    _fetch_update_manifest,
+    _github_asset_api_url,
+    update_failure_cause,
+    _valid_installer_url,
+    _valid_sha256,
+    _version_parts,
+)
 
 APP_NAME = "Clinthinker©"
-APP_VERSION = "2.0.0"
-UPDATE_MANIFEST_URL = "https://seanlordtrillo-ops.github.io/Clinthinker/version.json"
+APP_VERSION = "2.0.5"
+_logging_setup_complete = False
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
@@ -76,6 +101,10 @@ WEB_DIR = Path(
 
 @app.on_event("startup")
 def startup() -> None:
+    global _logging_setup_complete
+    if not _logging_setup_complete:
+        _core_logging_setup.setup_logging()
+        _logging_setup_complete = True
     initialize()
 
 
@@ -87,6 +116,10 @@ class PredictionRequest(BaseModel):
 class LabeledUpload(BaseModel):
     upload_id: str = Field(min_length=1, max_length=100)
     topic: str = Field(min_length=1, max_length=100)
+
+
+class UploadExamUpdate(BaseModel):
+    is_exam: bool
 
 
 class EvaluateDatasetRequest(BaseModel):
@@ -125,7 +158,7 @@ class QuestionGenerationSettings(BaseModel):
 
 class SettingsUpdate(BaseModel):
     language: str | None = Field(default=None, max_length=40)
-    appearance: Literal["orange", "pink", "regal"] | None = None
+    appearance: Literal["orange", "pink", "regal", "cmu"] | None = None
     question_generation: QuestionGenerationSettings | None = None
 
 
@@ -169,9 +202,18 @@ class RenameSavedSessionRequest(BaseModel):
 
 
 _question_batches: OrderedDict[str, dict] = OrderedDict()
-_MAX_QUESTION_BATCHES = 8
+# Each batch holds source text, so memory use scales with this cap.
+_MAX_QUESTION_BATCHES = 25
+_QUESTION_BATCH_UNAVAILABLE_DETAIL = (
+    "This practice set is no longer available (the app was restarted or newer sets "
+    "replaced it). Generate the questions again to save them or reveal the answer key."
+)
 
 
+@checks(
+    expected="Prediction analysis result",
+    probable_cause="Prediction or dataset analysis failed",
+)
 def _analyze(request: PredictionRequest, progress_callback=None) -> dict:
     dataset_id = request.training_dataset_id
     if dataset_id == "builtin":
@@ -196,6 +238,26 @@ def _analyze(request: PredictionRequest, progress_callback=None) -> dict:
         training_examples=training_examples,
         progress_callback=progress_callback,
     )
+    decision_policy = get_decision_policy(
+        {"id": dataset_id, "examples": (
+            BUILTIN_TRAINING_EXAMPLES if training_examples is None else training_examples
+        )}
+    )
+    classification = classify_with_policy(
+        request.text,
+        training_examples=training_examples,
+        dataset_id=dataset_id,
+        decision_policy=decision_policy,
+    )
+    predictions = [
+        {
+            **prediction,
+            "margin": classification["margin"],
+            "models_agree": classification["models_agree"],
+            "abstain_reason": classification["abstain_reason"],
+        }
+        for prediction in predictions
+    ]
     analysis_id = str(uuid.uuid4())
     with connect() as db:
         db.execute(
@@ -218,6 +280,7 @@ def _analyze(request: PredictionRequest, progress_callback=None) -> dict:
         "training_dataset_id": dataset_id,
         "training_dataset_name": dataset_name,
         "predictions": predictions,
+        **classification,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -227,29 +290,11 @@ def health() -> dict:
     return {"ok": True, "service": APP_NAME, "storage": "local", "version": APP_VERSION}
 
 
-def _version_parts(value: object) -> tuple[int, int, int] | None:
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value):
-        return None
-    return tuple(int(part) for part in value.split("."))
+@app.get("/api/diagnostics")
+def diagnostics() -> dict:
+    from .diagnostics import run_all
 
-
-def _fetch_update_manifest() -> dict:
-    with urllib.request.urlopen(UPDATE_MANIFEST_URL, timeout=5) as response:
-        manifest = json.loads(response.read().decode("utf-8"))
-    if not isinstance(manifest, dict):
-        raise ValueError("Invalid update manifest.")
-    return manifest
-
-
-def _valid_installer_url(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and value.startswith("https://github.com/seanlordtrillo-ops/Clinthinker/")
-    )
-
-
-def _valid_sha256(value: object) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[a-fA-F0-9]{64}", value) is not None
+    return run_all()
 
 
 @app.get("/api/updates/check")
@@ -266,7 +311,7 @@ def check_for_updates() -> dict:
             or remote_parts is None
             or remote_parts <= current_parts
             or not _valid_installer_url(installer_url)
-            or (sha256 is not None and not _valid_sha256(sha256))
+            or not _valid_sha256(sha256)
         ):
             return {"available": False}
         return {
@@ -278,10 +323,71 @@ def check_for_updates() -> dict:
         return {"available": False}
 
 
+def _log_update_stage(stage: str, status: str, cause: str) -> None:
+    record = {"stage": stage, "status": status, "cause": cause}
+    logging.getLogger(_core_logging_setup.LOGGER_NAME).info(
+        "update_stage=%s",
+        json.dumps(record, sort_keys=True),
+    )
+
+
+def _update_http_failure_cause(stage: str, error: HTTPException) -> str:
+    if stage == "check for update" and error.status_code == 403:
+        return "request header is missing or invalid"
+    if stage == "validate update info":
+        if error.status_code == 409:
+            return "no newer update is available"
+        if error.detail == "The installer URL is invalid.":
+            return "the installer link is invalid"
+        if error.detail == "The installer checksum is invalid.":
+            return "the installer checksum is missing or invalid"
+    if stage == "verify checksum" and error.detail == "The installer checksum does not match.":
+        return "the installer checksum did not match"
+    return "the request was rejected"
+
+
+def _raise_update_stage_failure(stage: str, error: Exception) -> None:
+    cause = update_failure_cause(stage, error)
+    _log_update_stage(stage, "failure", cause)
+    next_step = {
+        "check for update": "Check your internet connection and try again",
+        "validate update info": "Check the version, installer link, and SHA-256 information",
+        "find release on GitHub": "Check the GitHub release and try again",
+        "download": "Check your connection and try again",
+        "verify checksum": "Download the update again",
+        "back up database": "Check database availability and permissions, then try again",
+        "launch installer": "Check permissions or antivirus settings, then try again",
+    }[stage]
+    detail = f"Update failed at the {stage} step: {cause}. {next_step}."
+    raise HTTPException(status_code=500, detail=detail) from error
+
+
 @app.post("/api/updates/install")
-def install_update() -> dict:
+def install_update(request: Request) -> dict:
+    if request.headers.get("X-Clinthinker-Request") != "1":
+        _log_update_stage(
+            "check for update",
+            "failure",
+            "request header is missing or invalid",
+        )
+        raise HTTPException(status_code=403, detail="Missing required request header.")
+
     try:
-        manifest = _fetch_update_manifest()
+        with suppress_check_exception_logging():
+            manifest = _fetch_update_manifest()
+    except HTTPException as error:
+        _log_update_stage(
+            "check for update",
+            "failure",
+            _update_http_failure_cause("check for update", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("check for update", error)
+    else:
+        _log_update_stage("check for update", "success", "update information fetched")
+
+    try:
         remote_version = _version_parts(manifest.get("version"))
         current_version = _version_parts(APP_VERSION)
         if remote_version is None or current_version is None or remote_version <= current_version:
@@ -290,30 +396,157 @@ def install_update() -> dict:
         if not _valid_installer_url(installer_url):
             raise HTTPException(status_code=422, detail="The installer URL is invalid.")
         sha256 = manifest.get("sha256")
-        if sha256 is not None and not _valid_sha256(sha256):
+        if not _valid_sha256(sha256):
             raise HTTPException(status_code=422, detail="The installer checksum is invalid.")
+    except HTTPException as error:
+        _log_update_stage(
+            "validate update info",
+            "failure",
+            _update_http_failure_cause("validate update info", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("validate update info", error)
+    else:
+        _log_update_stage(
+            "validate update info",
+            "success",
+            "version, installer link, and checksum validated",
+        )
 
-        update_directory = Path(tempfile.mkdtemp(prefix="clinthinker-update-"))
-        installer_path = update_directory / "Clinthinker-Setup.exe"
+    try:
+        asset_url = _github_asset_api_url(installer_url)
+    except HTTPException as error:
+        _log_update_stage(
+            "find release on GitHub",
+            "failure",
+            _update_http_failure_cause("find release on GitHub", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("find release on GitHub", error)
+    else:
+        _log_update_stage(
+            "find release on GitHub",
+            "success",
+            "release installer was found",
+        )
+
+    try:
+        update_directory = Path(tempfile.gettempdir()) / "clinthinker-updates"
+        installer_path = update_directory / f"Clinthinker-Setup-{manifest['version']}.exe"
+        with suppress_check_exception_logging():
+            _download_update_asset(asset_url, installer_path)
+    except HTTPException as error:
+        _log_update_stage(
+            "download",
+            "failure",
+            _update_http_failure_cause("download", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("download", error)
+    else:
+        _log_update_stage("download", "success", "installer download completed")
+
+    try:
         digest = hashlib.sha256()
-        with urllib.request.urlopen(installer_url, timeout=30) as response:
-            with installer_path.open("wb") as installer_file:
-                while chunk := response.read(64 * 1024):
-                    installer_file.write(chunk)
-                    digest.update(chunk)
-        if sha256 is not None and digest.hexdigest().casefold() != sha256.casefold():
+        with installer_path.open("rb") as installer_file:
+            while chunk := installer_file.read(1024 * 1024):
+                digest.update(chunk)
+        if digest.hexdigest().casefold() != sha256.casefold():
+            installer_path.unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail="The installer checksum does not match.")
+    except HTTPException as error:
+        _log_update_stage(
+            "verify checksum",
+            "failure",
+            _update_http_failure_cause("verify checksum", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("verify checksum", error)
+    else:
+        _log_update_stage("verify checksum", "success", "installer checksum matched")
 
+    try:
         if not database.DB_PATH.is_file():
             raise FileNotFoundError("The local database file was not found.")
         backup_time = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         backup_path = database.STORAGE / f"assistant-{backup_time}.sqlite3"
-        shutil.copy2(database.DB_PATH, backup_path)
-        subprocess.Popen([str(installer_path)], cwd=str(update_directory))
-    except HTTPException:
+        with database.connect() as source:
+            with closing(sqlite3.connect(backup_path)) as backup:
+                source.backup(backup)
+        with closing(sqlite3.connect(backup_path)) as verified_backup:
+            integrity = verified_backup.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise sqlite3.DatabaseError("The database backup failed integrity_check.")
+        try:
+            backups = sorted(
+                (
+                    path
+                    for path in database.STORAGE.glob("assistant-*.sqlite3")
+                    if path.is_file()
+                ),
+                key=lambda path: path.stat().st_mtime_ns,
+                reverse=True,
+            )
+            for old_backup in backups[5:]:
+                old_backup.unlink()
+        except Exception as error:
+            logging.getLogger(_core_logging_setup.LOGGER_NAME).warning(
+                "Unable to prune update backups: %s", error
+            )
+    except HTTPException as error:
+        _log_update_stage(
+            "back up database",
+            "failure",
+            _update_http_failure_cause("back up database", error),
+        )
         raise
     except Exception as error:
-        raise HTTPException(status_code=500, detail="Update failed.") from error
+        _raise_update_stage_failure("back up database", error)
+    else:
+        _log_update_stage(
+            "back up database",
+            "success",
+            "database backup passed integrity check",
+        )
+
+    launch_options = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        launch_options["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+    try:
+        subprocess.Popen(
+            [str(installer_path), "/SILENT", "/NORESTART"],
+            cwd=str(update_directory),
+            **launch_options,
+        )
+    except HTTPException as error:
+        _log_update_stage(
+            "launch installer",
+            "failure",
+            _update_http_failure_cause("launch installer", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("launch installer", error)
+    else:
+        _log_update_stage("launch installer", "success", "installer process started")
+
+    shutdown_callback = getattr(app.state, "shutdown_callback", None)
+    if shutdown_callback is not None:
+        shutdown_timer = threading.Timer(1.5, shutdown_callback)
+        shutdown_timer.daemon = True
+        shutdown_timer.start()
+
     return {"started": True}
 
 
@@ -368,6 +601,10 @@ async def _receive_upload(file: UploadFile, deduplicate: bool = False) -> dict:
 
 
 @app.post("/api/upload")
+@checks(
+    expected="Uploaded file metadata",
+    probable_cause="Upload parsing or storage failed",
+)
 async def upload_material(file: UploadFile = File(...)) -> dict:
     return await _receive_upload(file)
 
@@ -383,10 +620,38 @@ async def upload_lesson(file: UploadFile = File(...)) -> dict:
 def list_uploads() -> list[dict]:
     with connect() as db:
         rows = db.execute(
-            "SELECT id, name, bytes, text_chars, uploaded_at FROM uploads "
+            "SELECT id, name, bytes, text_chars, uploaded_at, is_exam FROM uploads "
             "ORDER BY uploaded_at DESC"
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [
+        {
+            **dict(row),
+            "is_exam": None if row["is_exam"] is None else bool(row["is_exam"]),
+            "exam_auto": _is_exam_upload({"is_exam": None, "name": row["name"]}),
+        }
+        for row in rows
+    ]
+
+
+def _is_exam_upload(row) -> bool:
+    if row["is_exam"] is not None:
+        return bool(row["is_exam"])
+    return (
+        Path(row["name"]).suffix.lower() in {".pdf", ".docx", ".txt"}
+        and re.search(r"(?:^|[_\s-])exam(?:[_\s.-]|$)", row["name"], re.I) is not None
+    )
+
+
+@app.put("/api/uploads/{upload_id}/exam")
+def update_upload_exam(upload_id: str, request: UploadExamUpdate) -> dict:
+    with connect() as db:
+        cursor = db.execute(
+            "UPDATE uploads SET is_exam=? WHERE id=?",
+            (int(request.is_exam), upload_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Uploaded file not found.")
+    return {"id": upload_id, "is_exam": request.is_exam}
 
 
 @app.get("/api/training-datasets")
@@ -440,10 +705,48 @@ def evaluate_training_dataset(request: EvaluateDatasetRequest) -> dict:
         report = evaluate_classifier(examples)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    policy = report["decision_policy"]
+    with connect() as db:
+        db.execute(
+            "INSERT INTO model_calibration("
+            "dataset_id, dataset_hash, svm_temperature, ensemble_temperature, "
+            "confidence_threshold, min_margin, disagreement_abstain, "
+            "target_precision, low_reliability, sklearn_version) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(dataset_id) DO UPDATE SET "
+            "dataset_hash=excluded.dataset_hash, "
+            "svm_temperature=excluded.svm_temperature, "
+            "ensemble_temperature=excluded.ensemble_temperature, "
+            "confidence_threshold=excluded.confidence_threshold, "
+            "min_margin=excluded.min_margin, "
+            "disagreement_abstain=excluded.disagreement_abstain, "
+            "target_precision=excluded.target_precision, "
+            "low_reliability=excluded.low_reliability, "
+            "sklearn_version=excluded.sklearn_version, "
+            "created_at=datetime('now')",
+            (
+                request.training_dataset_id,
+                dataset_hash(examples),
+                report["calibration"]["svm_temperature"],
+                report["calibration"]["ensemble_temperature"],
+                policy["confidence_threshold"],
+                policy["min_margin"],
+                int(policy["disagreement_abstain"]),
+                policy["target_precision"],
+                int(policy["low_reliability"]),
+                sklearn_version,
+            ),
+        )
     return {
         **report,
         "training_dataset_id": request.training_dataset_id,
         "training_dataset_name": dataset_name,
+        "calibration_saved": True,
+        "decision_policy": {
+            "confidence_threshold": policy["confidence_threshold"],
+            "min_margin": policy["min_margin"],
+            "disagreement_abstain": policy["disagreement_abstain"],
+        },
     }
 
 
@@ -525,53 +828,59 @@ async def import_training_csv(
     if Path(filename).suffix.lower() != ".csv":
         raise HTTPException(status_code=415, detail="Choose a CSV training dataset.")
     content = await read_limited(file, MAX_UPLOAD_BYTES)
-    try:
-        decoded = content.decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(decoded), strict=True, restkey="_extra")
-        header_values = reader.fieldnames or []
-        normalized_headers = [header.strip().lower() for header in header_values if header and header.strip()]
-    except (UnicodeDecodeError, csv.Error) as error:
-        raise HTTPException(
-            status_code=422, detail="The CSV must be a valid UTF-8 file."
-        ) from error
-    if len(normalized_headers) != len(set(normalized_headers)):
-        raise HTTPException(status_code=422, detail="The CSV cannot contain duplicate column names.")
-    headers = {
-        header.strip().lower(): header
-        for header in header_values
-        if header and header.strip()
-    }
-    if "topic" not in headers or "text" not in headers:
-        raise HTTPException(
-            status_code=422,
-            detail="CSV must have a header row with 'topic' and 'text' columns.",
-        )
-    try:
-        examples = []
-        for row in reader:
-            if row.get("_extra") is not None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="A CSV row has more values than its header columns.",
-                )
-            examples.append(
-                ((row.get(headers["text"]) or ""), (row.get(headers["topic"]) or ""))
+    def import_dataset() -> dict:
+        try:
+            decoded = content.decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(decoded), strict=True, restkey="_extra")
+            header_values = reader.fieldnames or []
+            normalized_headers = [header.strip().lower() for header in header_values if header and header.strip()]
+        except (UnicodeDecodeError, csv.Error) as error:
+            raise HTTPException(
+                status_code=422, detail="The CSV must be a valid UTF-8 file."
+            ) from error
+        if len(normalized_headers) != len(set(normalized_headers)):
+            raise HTTPException(status_code=422, detail="The CSV cannot contain duplicate column names.")
+        headers = {
+            header.strip().lower(): header
+            for header in header_values
+            if header and header.strip()
+        }
+        if "topic" not in headers or "text" not in headers:
+            raise HTTPException(
+                status_code=422,
+                detail="CSV must have a header row with 'topic' and 'text' columns.",
             )
-            if len(examples) > 50000:
-                raise HTTPException(
-                    status_code=413, detail="CSV datasets are limited to 50,000 rows."
+        try:
+            examples = []
+            for row in reader:
+                if row.get("_extra") is not None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="A CSV row has more values than its header columns.",
+                    )
+                examples.append(
+                    ((row.get(headers["text"]) or ""), (row.get(headers["topic"]) or ""))
                 )
-    except csv.Error as error:
-        raise HTTPException(status_code=422, detail="Could not parse the CSV rows.") from error
-    _validate_training_examples(examples)
-    dataset_name = (name or Path(filename).stem).strip()
-    if not dataset_name:
-        raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
-    return _save_training_dataset(dataset_name, "csv", examples)
+                if len(examples) > 50000:
+                    raise HTTPException(
+                        status_code=413, detail="CSV datasets are limited to 50,000 rows."
+                    )
+        except csv.Error as error:
+            raise HTTPException(status_code=422, detail="Could not parse the CSV rows.") from error
+        _validate_training_examples(examples)
+        dataset_name = (name or "").strip() or Path(filename).stem.strip()
+        if not dataset_name:
+            raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
+        return _save_training_dataset(dataset_name, "csv", examples)
+
+    return await run_in_threadpool(import_dataset)
 
 
 @app.post("/api/training-datasets/documents")
 def create_document_dataset(request: DocumentDatasetRequest) -> dict:
+    dataset_name = request.name.strip()
+    if not dataset_name:
+        raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
     if len({example.upload_id for example in request.examples}) != len(request.examples):
         raise HTTPException(status_code=422, detail="Select each document only once.")
     topics = {example.topic.strip() for example in request.examples if example.topic.strip()}
@@ -601,9 +910,6 @@ def create_document_dataset(request: DocumentDatasetRequest) -> dict:
             examples.append((text, item.topic))
             example_sources.append({"id": item.upload_id, "name": row["name"]})
     _validate_training_examples(examples)
-    dataset_name = request.name.strip()
-    if not dataset_name:
-        raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
     return _save_training_dataset(dataset_name, "documents", examples, example_sources)
 
 
@@ -612,6 +918,10 @@ def delete_training_dataset(dataset_id: str) -> dict:
     if dataset_id == "builtin":
         raise HTTPException(status_code=409, detail="Built-in examples cannot be deleted.")
     with connect() as db:
+        db.execute(
+            "DELETE FROM model_calibration WHERE dataset_id=?",
+            (dataset_id,),
+        )
         cursor = db.execute("DELETE FROM training_datasets WHERE id=?", (dataset_id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Training dataset not found.")
@@ -684,6 +994,12 @@ async def predict_stream(request: PredictionRequest) -> StreamingResponse:
             message = error.detail if isinstance(error, HTTPException) else str(error)
             yield f"event: error\ndata: {json.dumps({'detail': message})}\n\n"
             return
+        except Exception:
+            yield (
+                "event: error\n"
+                f"data: {json.dumps({'detail': 'Analysis failed. Please try again.'})}\n\n"
+            )
+            return
         yield f"event: result\ndata: {json.dumps(result)}\n\n"
 
     return StreamingResponse(
@@ -737,6 +1053,10 @@ def database_recent_question_topics() -> list[dict]:
 
 
 @app.post("/api/questions/generate")
+@checks(
+    expected="Generated question result",
+    probable_cause="Question generation failed",
+)
 def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
     if len(set(request.upload_ids)) != len(request.upload_ids):
         raise HTTPException(status_code=422, detail="Select each course material only once.")
@@ -778,7 +1098,8 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
             upload_rows = []
             for upload_id in request.upload_ids:
                 upload = db.execute(
-                    "SELECT id, name, stored_path FROM uploads WHERE id=?", (upload_id,)
+                    "SELECT id, name, stored_path, is_exam FROM uploads WHERE id=?",
+                    (upload_id,),
                 ).fetchone()
                 if not upload:
                     raise HTTPException(status_code=404, detail="A selected course material was not found.")
@@ -831,19 +1152,21 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
             for batch in _question_batches.values()
             for item in batch["result"]["questions"]
         )
+        decision_policy = get_decision_policy(
+            {"id": request.training_dataset_id, "examples": examples}
+        )
 
         source_upload_rows = list(upload_rows)
         if lesson_ids:
             with connect() as db:
                 exam_rows = db.execute(
-                    "SELECT id, name, stored_path FROM uploads"
+                    "SELECT id, name, stored_path, is_exam FROM uploads"
                 ).fetchall()
             existing_upload_ids = set(lesson_ids)
             source_upload_rows.extend(
                 dict(row) for row in exam_rows
                 if row["id"] not in existing_upload_ids
-                and Path(row["name"]).suffix.lower() == ".pdf"
-                and re.search(r"(?:^|[_\s-])exam(?:[_\s.-]|$)", row["name"], re.I)
+                and _is_exam_upload(row)
             )
 
         sources = []
@@ -853,11 +1176,7 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
         exam_characters = 0
         for upload in source_upload_rows:
             is_lesson = upload["id"] in lesson_ids
-            is_exam = bool(
-                re.search(r"(?:^|[_\s-])exam(?:[_\s.-]|$)", upload["name"], re.I)
-                and Path(upload["name"]).suffix.lower() == ".pdf"
-                and not is_lesson
-            )
+            is_exam = _is_exam_upload(upload) and not is_lesson
             path = Path(upload["stored_path"]).resolve()
             if path.parent != UPLOADS.resolve():
                 raise HTTPException(status_code=500, detail="A saved course material could not be read.")
@@ -918,13 +1237,17 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                     examples,
                     exam_sources,
                     training_metrics,
+                    dataset_id=request.training_dataset_id,
+                    decision_policy=decision_policy,
                 )
             )
-        style_templates = (
-            extract_exam_stem_templates(
+        exam_question_patterns = (
+            extract_exam_question_patterns(
                 exam_sources,
                 classifier_examples,
                 training_metrics,
+                dataset_id=request.training_dataset_id,
+                decision_policy=decision_policy,
             )
             if lesson_ids and request.use_exam_style else []
         )
@@ -939,12 +1262,12 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
             dataset_name=dataset_name,
             sources=sources,
             lesson_mode=bool(lesson_ids),
-            style_templates=style_templates,
             training_metrics=training_metrics,
             saved_question_texts=saved_texts,
             preference_feedback=preference_feedback,
             similarity_threshold=request.similarity_threshold,
             priority_weights=request.priority_weights.model_dump(),
+            decision_policy=decision_policy,
         )
         if lesson_ids:
             lesson_text = "\n\n".join(
@@ -955,12 +1278,14 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                 result["questions"],
                 lesson_text,
                 classifier_examples,
-                exam_sources=exam_sources,
+                exam_sources=exam_sources if request.use_exam_style else [],
                 recent_question_topics=recent_topics,
                 emphasized_terms=lesson_features["emphasized_terms"],
                 heading_terms=lesson_features["heading_terms"],
                 list_terms=lesson_features["list_terms"],
                 training_metrics=training_metrics,
+                dataset_id=request.training_dataset_id,
+                decision_policy=decision_policy,
             )
             result.update(lesson_ranking)
             result["skipped_exam_files"] = skipped_exam_files
@@ -970,11 +1295,11 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                 "fit_count": training_metrics.get("fit_count", 0),
                 "cache_hits": training_metrics.get("cache_hits", 0),
                 "exam_passages_added": exam_passages_added,
-                "minimum_exam_label_confidence": 0.45,
+                "minimum_exam_label_confidence": decision_policy["confidence_threshold"],
             }
             result["style_reference_enabled"] = request.use_exam_style
             result["style_reference_files"] = len(exam_sources) if request.use_exam_style else 0
-            result["style_template_count"] = len(style_templates)
+            result["question_pattern_count"] = len(exam_question_patterns)
             lesson_names = [upload["name"] for upload in lesson_uploads]
             result["lesson_names"] = lesson_names
             result["lesson_name"] = lesson_names[0] if len(lesson_names) == 1 else None
@@ -1007,7 +1332,12 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
     public_result["questions"] = [
         {
             key: value for key, value in item.items()
-            if key not in {"correct_answer", "support_excerpt", "source_content"}
+            if key not in {
+                "correct_answer",
+                "support_excerpt",
+                "source_content",
+                "supported_statement",
+            }
         }
         for item in result["questions"]
     ]
@@ -1118,7 +1448,10 @@ def clear_question_feedback() -> dict:
 def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
     batch = _question_batches.get(request.generation_id)
     if not batch:
-        raise HTTPException(status_code=410, detail="Generate the questions again to reveal their answer key.")
+        raise HTTPException(
+            status_code=410,
+            detail=_QUESTION_BATCH_UNAVAILABLE_DETAIL,
+        )
     questions = {item["id"]: item for item in batch["result"]["questions"]}
     if not set(request.question_ids).issubset(questions):
         raise HTTPException(status_code=422, detail="The selected generated questions are invalid.")
@@ -1126,17 +1459,25 @@ def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
         "answers": {
             question_id: questions[question_id]["correct_answer"]
             for question_id in request.question_ids
-        }
+        },
+        "explanations": {
+            question_id: questions[question_id]["support_excerpt"]
+            for question_id in request.question_ids
+        },
     }
 
 
 @app.post("/api/questions/save")
+@checks(
+    expected="Saved question result",
+    probable_cause="Question saving failed",
+)
 def save_practice_questions(request: SaveQuestionsRequest) -> dict:
     batch = _question_batches.get(request.generation_id)
     if not batch:
         raise HTTPException(
             status_code=410,
-            detail="This generated set is no longer available. Generate the questions again before saving.",
+            detail=_QUESTION_BATCH_UNAVAILABLE_DETAIL,
         )
     requested_ids = set(request.question_ids)
     questions = {item["id"]: item for item in batch["result"]["questions"]}
@@ -1276,6 +1617,11 @@ def delete_saved_session(session_id: str) -> dict:
         cursor = db.execute("DELETE FROM saved_sessions WHERE id=?", (session_id,))
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="Saved question session not found.")
+        db.execute(
+            "DELETE FROM question_feedback WHERE question_id IN "
+            "(SELECT id FROM generated_questions WHERE session_id=?)",
+            (session_id,),
+        )
         db.execute("DELETE FROM generated_questions WHERE session_id=?", (session_id,))
     return {"deleted": session_id}
 

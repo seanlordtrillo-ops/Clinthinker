@@ -1,0 +1,118 @@
+[
+  {
+    "method": "get",
+    "path": "/api/analysis/latest"
+  },
+  {
+    "method": "get",
+    "path": "/api/diagnostics"
+  },
+  {
+    "method": "get",
+    "path": "/api/health"
+  },
+  {
+    "method": "post",
+    "path": "/api/lessons/upload"
+  },
+  {
+    "method": "post",
+    "path": "/api/predict/stream"
+  },
+  {
+    "method": "post",
+    "path": "/api/questions/answers"
+  },
+  {
+    "method": "delete",
+    "path": "/api/questions/feedback"
+  },
+  {
+    "method": "post",
+    "path": "/api/questions/feedback"
+  },
+  {
+    "method": "post",
+    "path": "/api/questions/generate"
+  },
+  {
+    "method": "get",
+    "path": "/api/questions/preferences"
+  },
+  {
+    "method": "post",
+    "path": "/api/questions/save"
+  },
+  {
+    "method": "get",
+    "path": "/api/questions/saved"
+  },
+  {
+    "method": "delete",
+    "path": "/api/questions/sessions/{session_id}"
+  },
+  {
+    "method": "put",
+    "path": "/api/questions/sessions/{session_id}"
+  },
+  {
+    "method": "get",
+    "path": "/api/settings"
+  },
+  {
+    "method": "put",
+    "path": "/api/settings"
+  },
+  {
+    "method": "get",
+    "path": "/api/training-datasets"
+  },
+  {
+    "method": "post",
+    "path": "/api/training-datasets/csv"
+  },
+  {
+    "method": "post",
+    "path": "/api/training-datasets/documents"
+  },
+  {
+    "method": "post",
+    "path": "/api/training-datasets/evaluate"
+  },
+  {
+    "method": "delete",
+    "path": "/api/training-datasets/{dataset_id}"
+  },
+  {
+    "method": "get",
+    "path": "/api/training-datasets/{dataset_id}/topics"
+  },
+  {
+    "method": "get",
+    "path": "/api/updates/check"
+  },
+  {
+    "method": "post",
+    "path": "/api/updates/install"
+  },
+  {
+    "method": "post",
+    "path": "/api/upload"
+  },
+  {
+    "method": "get",
+    "path": "/api/uploads"
+  },
+  {
+    "method": "delete",
+    "path": "/api/uploads/{upload_id}"
+  },
+  {
+    "method": "put",
+    "path": "/api/uploads/{upload_id}/exam"
+  },
+  {
+    "method": "get",
+    "path": "/api/uploads/{upload_id}/text"
+  }
+]

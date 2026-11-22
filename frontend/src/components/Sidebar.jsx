@@ -1,4 +1,7 @@
 import { CircleHelp, Database, FileQuestion, FileUp, NotebookText, Settings2, ShieldCheck } from "lucide-react";
+import cmuLogoFull from "../assets/cmu-logo-full.png";
+import cmuLogoFullBlueText from "../assets/cmu-logo-full-blue-text (1).png";
+import cmuShield from "../assets/cmu-shield (2).png";
 
 const items = [
   ["Upload", FileUp],
@@ -14,8 +17,12 @@ export default function Sidebar({ active, onNavigate, open, onClose }) {
     <>
       {open && <button className="drawer-scrim" aria-label="Close menu" onClick={onClose} />}
       <aside className={`sidebar ${open ? "sidebar-open" : ""}`}>
+        <div className="sidebar-campus-logo">
+          <img className="sidebar-campus-logo-dark" src={cmuLogoFullBlueText} alt="City of Malabon University, Founded 2003" />
+          <img className="sidebar-campus-logo-pink" src={cmuLogoFull} alt="City of Malabon University, Founded 2003" />
+        </div>
         <div className="brand">
-          <div className="brand-mark"><FileUp size={19} strokeWidth={1.8} /></div>
+          <div className="brand-mark"><img src={cmuShield} alt="" /></div>
           <div className="brand-name">Clinthinker©</div>
         </div>
         <div className="workspace-label">WORKSPACE</div>

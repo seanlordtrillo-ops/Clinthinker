@@ -40,7 +40,7 @@ folder. The outputs are:
 
 ```text
 release\Clinthinker©\Clinthinker©.exe
-release\Clinthinker-Setup-2.0.0.exe
+release\Clinthinker-Setup-2.0.5.exe
 ```
 
 Keep the entire generated app folder together when moving or sharing it,
@@ -59,15 +59,19 @@ installer is published, `version.json` intentionally contains no
 `installer_url`, and the app will not offer an update when the manifest version
 matches its own.
 
+Pass `-SkipLocalShortcuts` to `build-windows-app.ps1` when creating release
+artifacts without changing shortcuts on the build machine.
+
 ## Run from source
 
-Install the backend dependencies and start the API:
+The pinned dependency versions were generated with Python 3.14.3. Install the
+backend dependencies and start the API:
 
 ```powershell
+python -m venv backend\.venv
+.\backend\.venv\Scripts\Activate.ps1
+python -m pip install -c backend/constraints.txt -r backend/requirements.txt
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -75,7 +79,7 @@ In another terminal, build the desktop app and serve the interface:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run build
 npm run preview -- --host 127.0.0.1 --port 4173
 ```
@@ -252,10 +256,12 @@ Clinthinker checks the configured GitHub Pages `version.json` once at startup
 and only when **Check for updates** is selected in Settings. The check sends
 only that manifest request; an installer is downloaded only after selecting
 **Update**. The backend accepts installer URLs only from this project's GitHub
-repository and uses the URL from its own fetched manifest. A manifest may
-include a `sha256` field; when present, the installer must match it before
-launch. Before launching the installer, the app creates a timestamped backup
-of `assistant.sqlite3` in the storage folder.
+repository and uses the URL from its own fetched manifest. For downloads, it
+resolves the release asset through GitHub's API, retries interrupted transfers,
+and resumes partial files where supported. A manifest may include a `sha256`
+field; when present, the installer must match it before launch. Before
+launching the installer, the app creates a timestamped backup of
+`assistant.sqlite3` in the storage folder.
 
 When running from source, local app data is stored in
 `backend\storage\`; desktop builds use the LocalAppData folder above.
