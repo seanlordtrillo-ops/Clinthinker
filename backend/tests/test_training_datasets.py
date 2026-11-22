@@ -1,7 +1,9 @@
 import asyncio
 import io
 import json
+import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -99,6 +101,39 @@ class TrainingDatasetTests(unittest.TestCase):
         dataset = asyncio.run(main.import_training_csv(uploaded, name="   \t "))
 
         self.assertEqual(dataset["name"], "week3-topics")
+
+    def test_csv_dataset_save_runs_off_the_event_loop_thread(self):
+        self.with_isolated_storage()
+        uploaded = UploadFile(
+            filename="botany.csv",
+            file=io.BytesIO(
+                b"topic,text\n"
+                b"Botany,photosynthesis chlorophyll plant energy\n"
+                b"Botany,plant leaves sunlight carbon dioxide\n"
+                b"Astronomy,orbit telescope star galaxy\n"
+                b"Astronomy,planet moon nebula telescope\n"
+            ),
+        )
+        event_loop_thread = []
+        save_threads = []
+        save_training_dataset = main._save_training_dataset
+
+        def record_save_thread(*args, **kwargs):
+            save_threads.append(threading.get_ident())
+            return save_training_dataset(*args, **kwargs)
+
+        async def import_dataset():
+            event_loop_thread.append(threading.get_ident())
+            with patch.object(
+                main, "_save_training_dataset", side_effect=record_save_thread
+            ):
+                return await main.import_training_csv(uploaded, name=None)
+
+        dataset = asyncio.run(import_dataset())
+
+        self.assertEqual(len(save_threads), 1)
+        self.assertNotEqual(save_threads[0], event_loop_thread[0])
+        self.assertEqual(dataset["source_type"], "csv")
 
     def test_document_dataset_rejects_whitespace_name(self):
         self.with_isolated_storage()
@@ -227,6 +262,65 @@ class TrainingDatasetTests(unittest.TestCase):
                 dataset["id"],
             )
 
+    def test_predict_stream_hides_unexpected_analysis_errors(self):
+        self.with_isolated_storage()
+        errors = (
+            RuntimeError("runtime failure sentinel"),
+            sqlite3.OperationalError("database failure sentinel"),
+        )
+        expected_detail = "Analysis failed. Please try again."
+
+        with TestClient(main.app) as client:
+            for error in errors:
+                with self.subTest(error=type(error).__name__), patch.object(
+                    main, "_analyze", side_effect=error
+                ):
+                    response = client.post(
+                        "/api/predict/stream",
+                        json={"text": "test material"},
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                error_events = [
+                    frame
+                    for frame in response.text.strip().split("\n\n")
+                    if frame.startswith("event: error\n")
+                ]
+                self.assertEqual(len(error_events), 1)
+                data = next(
+                    line.removeprefix("data: ")
+                    for line in error_events[0].splitlines()
+                    if line.startswith("data: ")
+                )
+                self.assertEqual(json.loads(data), {"detail": expected_detail})
+                self.assertNotIn(str(error), response.text)
+                self.assertNotIn("Traceback", response.text)
+
+    def test_predict_stream_preserves_value_error_message(self):
+        self.with_isolated_storage()
+        detail = "Original validation message."
+
+        with TestClient(main.app) as client, patch.object(
+            main, "_analyze", side_effect=ValueError(detail)
+        ):
+            response = client.post(
+                "/api/predict/stream",
+                json={"text": "test material"},
+            )
+
+        error_events = [
+            frame
+            for frame in response.text.strip().split("\n\n")
+            if frame.startswith("event: error\n")
+        ]
+        self.assertEqual(len(error_events), 1)
+        data = next(
+            line.removeprefix("data: ")
+            for line in error_events[0].splitlines()
+            if line.startswith("data: ")
+        )
+        self.assertEqual(json.loads(data), {"detail": detail})
+
     def test_appearance_setting_is_saved_and_validated(self):
         self.with_isolated_storage()
 
@@ -245,6 +339,16 @@ class TrainingDatasetTests(unittest.TestCase):
             self.assertEqual(
                 client.get("/api/settings").json()["appearance"],
                 "regal",
+            )
+            saved_cmu_appearance = client.put(
+                "/api/settings",
+                json={"appearance": "cmu"},
+            )
+            self.assertEqual(saved_cmu_appearance.status_code, 200)
+            self.assertEqual(saved_cmu_appearance.json()["appearance"], "cmu")
+            self.assertEqual(
+                client.get("/api/settings").json()["appearance"],
+                "cmu",
             )
             question_settings = {
                 "training_dataset_id": "builtin",

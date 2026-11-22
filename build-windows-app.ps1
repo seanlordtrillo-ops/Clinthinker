@@ -111,7 +111,7 @@ try {
     }
   }
 
-  $installResult = Invoke-ProjectPython -Arguments @("-m", "pip", "install", "-r", "desktop-requirements.txt")
+  $installResult = Invoke-ProjectPython -Arguments @("-m", "pip", "install", "-c", "backend/constraints.txt", "-r", "desktop-requirements.txt")
   if ($installResult -ne 0) {
     throw "Installing desktop app dependencies failed."
   }

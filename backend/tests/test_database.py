@@ -9,6 +9,67 @@ from app import database
 
 
 class DatabaseMigrationTests(unittest.TestCase):
+    def test_fresh_database_user_version_is_one(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            with (
+                patch.object(database, "STORAGE", storage),
+                patch.object(database, "UPLOADS", storage / "uploads"),
+                patch.object(database, "DB_PATH", storage / "assistant.sqlite3"),
+            ):
+                database.initialize()
+                with database.connect() as db:
+                    user_version = db.execute("PRAGMA user_version").fetchone()[0]
+
+        self.assertEqual(user_version, 1)
+
+    def test_existing_database_user_version_is_updated_without_losing_data(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            db_path = storage / "assistant.sqlite3"
+            connection = sqlite3.connect(db_path)
+            try:
+                connection.execute(
+                    "CREATE TABLE saved_values (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO saved_values(value) VALUES('preserved')"
+                )
+                connection.execute("PRAGMA user_version = 0")
+                connection.commit()
+            finally:
+                connection.close()
+
+            with (
+                patch.object(database, "STORAGE", storage),
+                patch.object(database, "UPLOADS", storage / "uploads"),
+                patch.object(database, "DB_PATH", db_path),
+            ):
+                database.initialize()
+                with database.connect() as db:
+                    user_version = db.execute("PRAGMA user_version").fetchone()[0]
+                    saved_value = db.execute(
+                        "SELECT value FROM saved_values WHERE id=1"
+                    ).fetchone()["value"]
+
+        self.assertEqual(user_version, 1)
+        self.assertEqual(saved_value, "preserved")
+
+    def test_second_initialize_keeps_user_version_at_one(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            storage = Path(temporary)
+            with (
+                patch.object(database, "STORAGE", storage),
+                patch.object(database, "UPLOADS", storage / "uploads"),
+                patch.object(database, "DB_PATH", storage / "assistant.sqlite3"),
+            ):
+                database.initialize()
+                database.initialize()
+                with database.connect() as db:
+                    user_version = db.execute("PRAGMA user_version").fetchone()[0]
+
+        self.assertEqual(user_version, 1)
+
     def test_adds_nullable_is_exam_to_legacy_uploads(self):
         with tempfile.TemporaryDirectory() as temporary:
             storage = Path(temporary)

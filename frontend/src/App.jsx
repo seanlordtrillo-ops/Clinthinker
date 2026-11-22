@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle, BrainCircuit, Check, ChevronDown, ChevronRight, Database, Download, Eye,
-  FileSpreadsheet, FileText, FileUp, FolderOpen, Menu, Printer, RotateCcw,
+  FileSpreadsheet, FileText, FileUp, FolderOpen, Printer, RotateCcw,
   NotebookText, Pencil, Save, ShieldCheck, Sparkles, ThumbsDown, ThumbsUp, Trash2, Upload, X
 } from "lucide-react";
+import cmuShieldImage from "./assets/cmu-shield (2).png";
 import Sidebar from "./components/Sidebar.jsx";
 import { api } from "./lib/api.js";
 
@@ -40,6 +41,8 @@ export default function App() {
   const [updateOffer, setUpdateOffer] = useState(null);
   const [updateCheckBusy, setUpdateCheckBusy] = useState(false);
   const [updateState, setUpdateState] = useState("");
+  const [updateFailureMessage, setUpdateFailureMessage] = useState("");
+  const [updateInstallMessage, setUpdateInstallMessage] = useState("");
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [questionDatasetId, setQuestionDatasetId] = useState("builtin");
   const [questionUploadIds, setQuestionUploadIds] = useState([]);
@@ -53,6 +56,7 @@ export default function App() {
   const [expandedSavedSessions, setExpandedSavedSessions] = useState([]);
   const [savedAnswerSessions, setSavedAnswerSessions] = useState([]);
   const [savedAnswersLoadedSessions, setSavedAnswersLoadedSessions] = useState([]);
+  const [printingSavedSessionId, setPrintingSavedSessionId] = useState(null);
   const [questionResult, setQuestionResult] = useState(null);
   const [questionSetUnavailable, setQuestionSetUnavailable] = useState(false);
   const [questionPreferences, setQuestionPreferences] = useState({
@@ -63,6 +67,22 @@ export default function App() {
   });
   const [questionAnswers, setQuestionAnswers] = useState({});
   const [questionExplanations, setQuestionExplanations] = useState({});
+
+  useEffect(() => {
+    if (!printingSavedSessionId) return undefined;
+    const clearPrintingSession = () => setPrintingSavedSessionId(null);
+    window.addEventListener("afterprint", clearPrintingSession);
+    window.print();
+    return () => window.removeEventListener("afterprint", clearPrintingSession);
+  }, [printingSavedSessionId]);
+  useEffect(() => {
+    if (updateState !== "installing") return undefined;
+    const reminder = window.setTimeout(
+      () => setUpdateInstallMessage("If the app did not close, close it to finish installing."),
+      15000
+    );
+    return () => window.clearTimeout(reminder);
+  }, [updateState]);
   const [questionBusy, setQuestionBusy] = useState(false);
   const [questionsSaved, setQuestionsSaved] = useState(false);
   const [questionForm, setQuestionForm] = useState({
@@ -218,7 +238,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.appearance = settings.appearance;
     document.title = "Clinthinker©";
-    const themeColors = { orange: "#100d0a", pink: "#fff8fc", regal: "#171225" };
+    const themeColors = { orange: "#100d0a", pink: "#fff8fc", regal: "#171225", cmu: "#f6f9fc" };
     document.querySelector('meta[name="theme-color"]')?.setAttribute(
       "content",
       themeColors[settings.appearance] || themeColors.orange
@@ -337,11 +357,19 @@ export default function App() {
   const installUpdate = async () => {
     if (!updateOffer) return;
     setUpdateState("downloading");
+    setUpdateFailureMessage("");
+    setUpdateInstallMessage("");
     try {
       await api.installUpdate();
-      window.close();
-    } catch {
+      setUpdateInstallMessage("Installing update. The app will close and restart.");
+      setUpdateState("installing");
+    } catch (installError) {
       setUpdateState("failed");
+      setUpdateFailureMessage(
+        installError?.status
+          ? installError.message
+          : "The update service could not be reached. Check the app connection and try again."
+      );
     }
   };
 
@@ -920,16 +948,17 @@ export default function App() {
     }
   };
 
-  const exportQuestionsCsv = () => {
-    if (!questionResult?.questions?.length) return;
+  const exportSavedQuestionsCsv = (session) => {
+    if (!session?.questions?.length) return;
+    const includeAnswers = savedAnswerSessions.includes(session.id);
     const rows = [
       ["Topic", "Type", "Difficulty", "Priority", "Confidence", "Question", "Choices", "Answer", "Source"],
-      ...questionResult.questions.map((item) => [
+      ...session.questions.map((item) => [
         item.topic, item.question_type, item.difficulty,
         `${Math.round(item.priority_score * 100)}%`,
         `${Math.round(item.confidence_score * 100)}%`,
-        item.question_text, item.choices.join(" | "),
-        questionAnswers[item.id] || "",
+        item.question_text, (item.choices || []).join(" | "),
+        includeAnswers ? item.correct_answer || "" : "",
         item.source_reference
       ])
     ];
@@ -941,14 +970,19 @@ export default function App() {
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = "clinthinker-practice-questions.csv";
+    const safeSessionId = String(session.id).replace(/[^a-z0-9_-]/gi, "-");
+    anchor.download = `clinthinker-saved-questions-${safeSessionId}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
 
+  const printSavedQuestions = (session) => {
+    setPrintingSavedSessionId(session.id);
+  };
+
   return (
     <div
-      className={`app-shell app-window theme-${settings.appearance}`}
+      className={`app-shell app-window theme-${settings.appearance}${printingSavedSessionId ? " printing-saved-session" : ""}`}
       onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
       onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}
@@ -961,17 +995,33 @@ export default function App() {
       }} open={menuOpen} onClose={() => setMenuOpen(false)} />
       <main className="main-area medium-main">
         <header className="topbar">
-          <button className="menu-trigger" onClick={() => setMenuOpen(true)}><Menu size={18} /><span>MENU</span></button>
+          <button className="menu-trigger" onClick={() => setMenuOpen(true)}><img className="menu-trigger-icon" src={cmuShieldImage} alt="" /><span>MENU</span></button>
           <div className="mobile-brand"><div className="brand-mark"><BrainCircuit size={17} /></div> Clinthinker©</div>
           <div className="breadcrumb"><span>LOCAL WORKSPACE</span><span className="breadcrumb-sep">/</span><strong>{page}</strong></div>
           <div className="local-status"><span /> OFFLINE · SAVED ON THIS DEVICE</div>
         </header>
         {updateOffer && <div className="app-update-banner">
-          <span>Version {updateOffer.version} is available</span>
-          <button className="button-dark" onClick={installUpdate} disabled={updateState === "downloading"}>
-            {updateState === "downloading" ? "Downloading..." : updateState === "failed" ? "Update failed" : "Update"}
+          <span role={updateState === "failed" ? "alert" : undefined}>
+            {updateState === "failed"
+              ? updateFailureMessage
+              : updateState === "installing"
+                ? updateInstallMessage
+                : `Version ${updateOffer.version} is available`}
+          </span>
+          <button
+            className="button-dark"
+            onClick={installUpdate}
+            disabled={updateState === "downloading" || updateState === "installing"}
+          >
+            {updateState === "downloading"
+              ? "Downloading..."
+              : updateState === "installing"
+                ? "Installing..."
+                : updateState === "failed"
+                  ? "Retry update"
+                  : "Update"}
           </button>
-          <button className="button-outline" disabled={updateState === "downloading"} onClick={() => {
+          <button className="button-outline" disabled={updateState === "downloading" || updateState === "installing"} onClick={() => {
             setUpdateOffer(null);
             setUpdateState("");
           }}>Later</button>
@@ -1028,6 +1078,9 @@ export default function App() {
           onToggleAllAnswers={toggleAllSavedAnswers}
           onRename={renameSavedSession}
           onDelete={deleteSavedSession}
+          onExportCsv={exportSavedQuestionsCsv}
+          onExportPdf={printSavedQuestions}
+          printingSessionId={printingSavedSessionId}
           onRateQuestion={rateQuestion}
           error={error}
         />}
@@ -1056,8 +1109,6 @@ export default function App() {
           onGenerate={generateQuestions}
           onSave={saveGeneratedQuestions}
           onRevealAnswers={revealGeneratedAnswers}
-          onExportCsv={exportQuestionsCsv}
-          onExportPdf={() => window.print()}
           onRateQuestion={rateQuestion}
           onResetPreferences={resetQuestionPreferences}
           onBack={() => setPage("Upload")}
@@ -1143,7 +1194,7 @@ function PracticeQuestionsPage({
   lessonUploadBusy, lessonProgress, useExamStyle, onChangeExamStyle, lessonUploadInput,
   onUploadLessons, onRemoveLesson, form, onOpenSettings,
   result, preferences, answers, explanations, busy, saved, questionSetUnavailable, onGenerate, onSave, onRevealAnswers,
-  onExportCsv, onExportPdf, onBack, error, notice, onRateQuestion, onResetPreferences
+  onBack, error, notice, onRateQuestion, onResetPreferences
 }) {
   const [lessonDropActive, setLessonDropActive] = useState(false);
   const [questionSort, setQuestionSort] = useState("likelihood");
@@ -1177,15 +1228,6 @@ function PracticeQuestionsPage({
     }))
     .filter((part) => part.questions.length > 0);
   const numberedExamQuestions = questionParts.flatMap((part) => part.questions);
-  const printSubject = result?.lesson_name || selectedDatasetName;
-  const printFooter = `${printSubject} | ${examQuestions.length} point${examQuestions.length === 1 ? "" : "s"}`;
-  const printFooterCss = printFooter
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
-    .replaceAll("<", "\\3C ")
-    .replaceAll("\r", " ")
-    .replaceAll("\n", " ")
-    .replaceAll("\f", " ");
   const rejectionLabels = {
     already_a_question: "Already phrased as a question",
     below_topic_relevance: "Below the 45% topic-relevance threshold",
@@ -1316,7 +1358,7 @@ function PracticeQuestionsPage({
     {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
     {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
 
-    {result && <div className="question-results question-print-area">
+    {result && <div className="question-results">
       {result.likely_topics && <section className="likely-topics-panel">
         <div className="section-heading"><div><h2>Likely exam topics</h2>
           <p>{result.exam_evidence_available
@@ -1371,13 +1413,8 @@ function PracticeQuestionsPage({
       <div className="question-actions">
         <button className="button-outline" disabled={busy || !result.questions.length} onClick={onGenerate}><RotateCcw size={14} /> Generate Again</button>
         <button className="button-outline" disabled={busy || saved || questionSetUnavailable || !result.questions.length} onClick={onSave}><Save size={14} /> {saved ? "Saved Locally" : "Save Questions"}</button>
-        <button className="button-outline" disabled={!result.questions.length} onClick={onExportCsv}><Download size={14} /> Export CSV</button>
-        <button className="button-outline" disabled={!result.questions.length} onClick={onExportPdf}><Printer size={14} /> Export PDF</button>
         <button className="button-outline" disabled={busy || !result.questions.length || (questionSetUnavailable && !Object.keys(answers).length)} onClick={onRevealAnswers}><Eye size={14} /> {Object.keys(answers).length ? "Hide Answers" : "Show Answers"}</button>
       </div>
-      <p className="exam-export-note no-print">
-        The PDF keeps answers off the exam pages. Show Answers first to append a separate answer key and explanations.
-      </p>
       {result.likely_topics && <label className="question-sort-control">
         Sort questions
         <select value={questionSort} onChange={(event) => setQuestionSort(event.target.value)}>
@@ -1427,49 +1464,6 @@ function PracticeQuestionsPage({
           {explanations[item.id] && <p>{explanations[item.id]}</p>}
         </li>)}</ol>
       </details>}
-      <div className="exam-print-document">
-        <style>{`@media print {
-          @page {
-            margin: 18mm 15mm 20mm;
-            @bottom-left { content: "${printFooterCss}"; font-size: 8pt; color: #333; }
-            @bottom-right { content: "Page " counter(page); font-size: 8pt; color: #333; }
-          }
-        }`}</style>
-        <header className="exam-print-header">
-          <h1>{printSubject}</h1>
-          <p>Practice Examination</p>
-          <div><span>Name: ____________________________________</span><span>Date: __________________</span></div>
-        </header>
-        {questionParts.map((part) => <section className="exam-part" key={`print-${part.type}`}>
-          <div className="exam-question-list">
-            {part.questions.map((item) => <article className="exam-question" key={`print-${item.id}`}>
-              <p className="exam-question-stem"><strong>{item.exam_number}.</strong> {item.question_text}</p>
-              {item.choices?.length > 0 && <ol className="exam-choices">
-                {item.choices.map((choice, choiceIndex) => <li key={`${item.id}-${choiceIndex}`}>
-                  <span>{String.fromCharCode(65 + choiceIndex)}.</span>{choice}
-                </li>)}
-              </ol>}
-              {item.question_type === "True or False" && <div className="exam-response-line">True / False: ____________________</div>}
-              {item.question_type === "Identification" && <div className="exam-response-line" />}
-            </article>)}
-          </div>
-        </section>)}
-        {Object.keys(answers).length > 0 && <section className="exam-print-answer-key">
-          <h2>ANSWER KEY AND EXPLANATIONS</h2>
-          <ol>{numberedExamQuestions.map((item) => {
-            const answerIndex = item.choices?.findIndex(
-              (choice) => String(choice).toLowerCase() === String(answers[item.id] || "").toLowerCase()
-            );
-            const answerLabel = answerIndex >= 0
-              ? `${String.fromCharCode(65 + answerIndex)}. ${answers[item.id]}`
-              : answers[item.id];
-            return <li key={`key-${item.id}`}>
-              <strong>{item.exam_number}. {answerLabel}</strong>
-              {explanations[item.id] && <p>{explanations[item.id]}</p>}
-            </li>;
-          })}</ol>
-        </section>}
-      </div>
       {!result.lesson_analysis && result.topic_priorities?.length > 0 && <details className="question-priority-breakdown">
         <summary>Transparent topic priority breakdown</summary>
         <div className="priority-table-wrap"><table><thead><tr><th>Topic</th><th>Priority</th><th>Frequency</th><th>Material</th><th>Model</th><th>Recent*</th></tr></thead>
@@ -1487,7 +1481,8 @@ function PracticeQuestionsPage({
 
 function SavedQuestionsPage({
   sessions, busy, expandedSessions, setExpandedSessions, visibleAnswerSessions,
-  onToggleAnswers, onToggleAllAnswers, onRename, onDelete, onRateQuestion, error
+  onToggleAnswers, onToggleAllAnswers, onRename, onDelete, onExportCsv, onExportPdf,
+  printingSessionId, onRateQuestion, error
 }) {
   const questionSessions = sessions.filter((session) => session.questions.length);
   const allAnswersVisible = questionSessions.length > 0
@@ -1518,6 +1513,9 @@ function SavedQuestionsPage({
         </button>}
       </div>}
     </div>
+    <p className="exam-export-note no-print">
+      PDF exports include an answer key only while that session's answers are shown.
+    </p>
 
     {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
     {busy && !sessions.length
@@ -1527,10 +1525,20 @@ function SavedQuestionsPage({
           {sessions.map((session) => {
             const expanded = expandedSessions.includes(session.id);
             const answersVisible = visibleAnswerSessions.includes(session.id);
+            const printFooterCss = `${session.title} | ${session.questions.length} questions`
+              .replaceAll("\\", "\\\\")
+              .replaceAll('"', '\\"')
+              .replaceAll("<", "\\3C ")
+              .replaceAll("\r", " ")
+              .replaceAll("\n", " ")
+              .replaceAll("\f", " ");
             const createdAt = new Date(session.created_at);
             const formattedDate = Number.isNaN(createdAt.getTime())
               ? session.created_at : createdAt.toLocaleString();
-            return <article className="saved-session-card" key={session.id}>
+            return <article
+              className={`saved-session-card${printingSessionId === session.id ? " saved-session-print-target" : ""}`}
+              key={session.id}
+            >
               <div className="saved-session-heading">
                 <button
                   className="saved-session-expand"
@@ -1547,6 +1555,22 @@ function SavedQuestionsPage({
                   </span>
                 </button>
                 <div className="saved-session-actions">
+                  <button
+                    className="button-outline"
+                    onClick={() => onExportCsv(session)}
+                    aria-label={`Export ${session.title} as CSV`}
+                    title="Export session as CSV"
+                  >
+                    <Download size={13} />
+                  </button>
+                  <button
+                    className="button-outline"
+                    onClick={() => onExportPdf(session)}
+                    aria-label={`Export ${session.title} as PDF`}
+                    title="Export session as PDF"
+                  >
+                    <Printer size={13} />
+                  </button>
                   <button className="button-outline" onClick={() => onRename(session)} aria-label={`Rename ${session.title}`} title="Rename session">
                     <Pencil size={13} />
                   </button>
@@ -1602,6 +1626,40 @@ function SavedQuestionsPage({
                   </article>)}
                 </div>
               </>}
+              <div className="saved-session-print-document">
+                {printingSessionId === session.id && <style>{`@media print {
+                  @page {
+                    margin: 18mm 15mm 20mm;
+                    @bottom-left { content: "${printFooterCss}"; font-size: 8pt; color: #333; }
+                    @bottom-right { content: "Page " counter(page); font-size: 8pt; color: #333; }
+                  }
+                }`}</style>}
+                <header className="exam-print-header">
+                  <h1>{session.title}</h1>
+                  <p>Saved Practice Questions</p>
+                  <div><span>Topic: {session.topic}</span><span>{formattedDate}</span></div>
+                </header>
+                <section className="exam-part">
+                  <div className="exam-question-list">
+                    {session.questions.map((item, index) => <article className="exam-question" key={`print-${item.id}`}>
+                      <p className="exam-question-stem"><strong>{index + 1}.</strong> {item.question_text}</p>
+                      {item.choices?.length > 0 && <ol className="exam-choices">
+                        {item.choices.map((choice, choiceIndex) => <li key={`${item.id}-${choiceIndex}`}>
+                          <span>{String.fromCharCode(65 + choiceIndex)}.</span>{choice}
+                        </li>)}
+                      </ol>}
+                      {item.question_type === "True or False" && <div className="exam-response-line">True / False: ____________________</div>}
+                      {item.question_type === "Identification" && <div className="exam-response-line" />}
+                    </article>)}
+                  </div>
+                </section>
+                {answersVisible && <section className="exam-print-answer-key">
+                  <h2>ANSWER KEY</h2>
+                  <ol>{session.questions.map((item, index) => <li key={`answer-${item.id}`}>
+                    <strong>{index + 1}. {item.correct_answer || ""}</strong>
+                  </li>)}</ol>
+                </section>}
+              </div>
             </article>;
           })}
         </div>
@@ -1952,6 +2010,7 @@ function SettingsPage({
           <option value="orange">Black &amp; Orange</option>
           <option value="pink">Clinthinker White &amp; Pink</option>
           <option value="regal">Alamo&apos;s Regal Nature (Gold &amp; Purple)</option>
+          <option value="cmu">CMU Version</option>
         </select>
       </label>
       <div className="app-version-row">

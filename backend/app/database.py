@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -12,6 +13,27 @@ ROOT = Path(__file__).resolve().parent.parent
 STORAGE = Path(os.environ.get("TOPIC_ASSISTANT_DATA_DIR", ROOT / "storage"))
 UPLOADS = STORAGE / "uploads"
 DB_PATH = STORAGE / "assistant.sqlite3"
+_StoragePaths = tuple[Path, Path, Path]
+_STORAGE_OVERRIDE: ContextVar[_StoragePaths | None] = ContextVar(
+    "database_storage_override", default=None
+)
+
+
+def _storage_paths() -> _StoragePaths:
+    override = _STORAGE_OVERRIDE.get()
+    if override is not None:
+        return override
+    return STORAGE, UPLOADS, DB_PATH
+
+
+@contextmanager
+def use_storage(storage: Path) -> Iterator[Path]:
+    paths = (storage, storage / "uploads", storage / "assistant.sqlite3")
+    token = _STORAGE_OVERRIDE.set(paths)
+    try:
+        yield paths[1]
+    finally:
+        _STORAGE_OVERRIDE.reset(token)
 
 DEFAULT_SETTINGS = {
     "language": "English",
@@ -37,8 +59,9 @@ DEFAULT_SETTINGS = {
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    STORAGE.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH)
+    storage, _, db_path = _storage_paths()
+    storage.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path, timeout=30)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     try:
@@ -49,7 +72,8 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 
 def initialize() -> None:
-    UPLOADS.mkdir(parents=True, exist_ok=True)
+    _, uploads, _ = _storage_paths()
+    uploads.mkdir(parents=True, exist_ok=True)
     with connect() as db:
         db.executescript(
             """
@@ -176,7 +200,7 @@ def initialize() -> None:
                 "ALTER TABLE question_feedback ADD COLUMN answer_length TEXT NOT NULL "
                 "DEFAULT 'single-term'"
             )
-        upload_root = UPLOADS.resolve()
+        upload_root = uploads.resolve()
         for upload in db.execute(
             "SELECT id, stored_path FROM uploads"
         ).fetchall():
@@ -189,7 +213,7 @@ def initialize() -> None:
                     continue
             except OSError:
                 pass
-            rebased_path = (UPLOADS / f"{upload['id']}{suffix}").resolve()
+            rebased_path = (uploads / f"{upload['id']}{suffix}").resolve()
             if rebased_path.parent == upload_root and rebased_path.is_file():
                 db.execute(
                     "UPDATE uploads SET stored_path=? WHERE id=?",
@@ -222,6 +246,9 @@ def initialize() -> None:
             "INSERT OR IGNORE INTO settings(id, value) VALUES(1, ?)",
             (json.dumps(DEFAULT_SETTINGS),),
         )
+        user_version = db.execute("PRAGMA user_version").fetchone()[0]
+        if user_version == 0:
+            db.execute("PRAGMA user_version = 1")
 
 
 def _backfill_saved_sessions(db: sqlite3.Connection) -> None:

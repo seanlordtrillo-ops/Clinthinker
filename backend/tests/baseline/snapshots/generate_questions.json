@@ -1,0 +1,45 @@
+{
+  "diagnostics": {
+    "header_lines_skipped": 0,
+    "rejections": [
+      {
+        "count": 3,
+        "reason": "not_enough_distinct_distractors"
+      }
+    ],
+    "sentences_matching_filters": 3,
+    "source_sentence_count": 3
+  },
+  "disclaimer": "Priority indicates topic relevance in the selected sources; it is not a prediction or guarantee that a topic will appear on an examination.",
+  "minimum_topic_confidence": 0.45,
+  "priority_weights": {
+    "course_importance": 0.3,
+    "historical_frequency": 0.4,
+    "model_confidence": 0.2,
+    "recent_occurrence": 0.1
+  },
+  "questions": [],
+  "requested_count": 4,
+  "shortfall": 4,
+  "shortfall_reason": "Not enough distinct, source-supported questions passed the quality checks.",
+  "topic_priorities": [
+    {
+      "course_importance_score": 0.0,
+      "frequency_score": 1.0,
+      "model_confidence_score": 0.89,
+      "priority_score": 0.628,
+      "recent_occurrence_available": false,
+      "recent_occurrence_score": 0.5,
+      "topic": "Networking"
+    },
+    {
+      "course_importance_score": 0.0,
+      "frequency_score": 1.0,
+      "model_confidence_score": 0.11,
+      "priority_score": 0.472,
+      "recent_occurrence_available": false,
+      "recent_occurrence_score": 0.5,
+      "topic": "Databases"
+    }
+  ]
+}

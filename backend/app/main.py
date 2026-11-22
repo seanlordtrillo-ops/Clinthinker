@@ -6,23 +6,26 @@ import hashlib
 import http.client
 import io
 import json
+import logging
 import os
 import re
-import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import OrderedDict
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
@@ -32,6 +35,10 @@ from sklearn import __version__ as sklearn_version
 
 from . import database
 from .database import UPLOADS, connect, get_settings, initialize, save_settings
+from .core.checks import checks, suppress_check_exception_logging
+from .core import errors as _core_errors
+from .core import logging_setup as _core_logging_setup
+from . import diagnostics as _diagnostics
 from .ml import (
     BUILTIN_TRAINING_EXAMPLE_COUNT,
     BUILTIN_TRAINING_EXAMPLES,
@@ -53,10 +60,20 @@ from .questions import (
     question_preference_features,
     rank_lesson_likelihood,
 )
+from .services.updates import (
+    UPDATE_MANIFEST_URL,
+    _download_update_asset,
+    _fetch_update_manifest,
+    _github_asset_api_url,
+    update_failure_cause,
+    _valid_installer_url,
+    _valid_sha256,
+    _version_parts,
+)
 
 APP_NAME = "Clinthinker©"
-APP_VERSION = "2.0.4"
-UPDATE_MANIFEST_URL = "https://seanlordtrillo-ops.github.io/Clinthinker/version.json"
+APP_VERSION = "2.0.5"
+_logging_setup_complete = False
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 app.add_middleware(
     CORSMiddleware,
@@ -84,6 +101,10 @@ WEB_DIR = Path(
 
 @app.on_event("startup")
 def startup() -> None:
+    global _logging_setup_complete
+    if not _logging_setup_complete:
+        _core_logging_setup.setup_logging()
+        _logging_setup_complete = True
     initialize()
 
 
@@ -137,7 +158,7 @@ class QuestionGenerationSettings(BaseModel):
 
 class SettingsUpdate(BaseModel):
     language: str | None = Field(default=None, max_length=40)
-    appearance: Literal["orange", "pink", "regal"] | None = None
+    appearance: Literal["orange", "pink", "regal", "cmu"] | None = None
     question_generation: QuestionGenerationSettings | None = None
 
 
@@ -189,6 +210,10 @@ _QUESTION_BATCH_UNAVAILABLE_DETAIL = (
 )
 
 
+@checks(
+    expected="Prediction analysis result",
+    probable_cause="Prediction or dataset analysis failed",
+)
 def _analyze(request: PredictionRequest, progress_callback=None) -> dict:
     dataset_id = request.training_dataset_id
     if dataset_id == "builtin":
@@ -265,140 +290,11 @@ def health() -> dict:
     return {"ok": True, "service": APP_NAME, "storage": "local", "version": APP_VERSION}
 
 
-def _version_parts(value: object) -> tuple[int, int, int] | None:
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value):
-        return None
-    return tuple(int(part) for part in value.split("."))
+@app.get("/api/diagnostics")
+def diagnostics() -> dict:
+    from .diagnostics import run_all
 
-
-def _fetch_update_manifest() -> dict:
-    with urllib.request.urlopen(UPDATE_MANIFEST_URL, timeout=5) as response:
-        manifest = json.loads(response.read().decode("utf-8"))
-    if not isinstance(manifest, dict):
-        raise ValueError("Invalid update manifest.")
-    return manifest
-
-
-def _valid_installer_url(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        parsed = urllib.parse.urlsplit(value)
-    except ValueError:
-        return False
-    path_parts = parsed.path.split("/")
-    return (
-        parsed.scheme == "https"
-        and parsed.netloc == "github.com"
-        and len(path_parts) == 7
-        and path_parts[:5]
-        == ["", "seanlordtrillo-ops", "Clinthinker", "releases", "download"]
-        and bool(path_parts[5])
-        and bool(path_parts[6])
-        and not parsed.query
-        and not parsed.fragment
-    )
-
-
-def _valid_sha256(value: object) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[a-fA-F0-9]{64}", value) is not None
-
-
-def _github_asset_api_url(installer_url: str) -> str:
-    parsed = urllib.parse.urlsplit(installer_url)
-    path_parts = parsed.path.split("/")
-    if (
-        len(path_parts) != 7
-        or path_parts[:5]
-        != ["", "seanlordtrillo-ops", "Clinthinker", "releases", "download"]
-        or not path_parts[5]
-        or not path_parts[6]
-    ):
-        raise ValueError("The installer URL is not a GitHub release asset URL.")
-
-    tag = urllib.parse.unquote(path_parts[5])
-    asset_name = urllib.parse.unquote(path_parts[6])
-    release_url = (
-        "https://api.github.com/repos/seanlordtrillo-ops/Clinthinker/releases/tags/"
-        + urllib.parse.quote(tag, safe="")
-    )
-    request = urllib.request.Request(
-        release_url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "Clinthinker",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        release = json.loads(response.read().decode("utf-8"))
-    if not isinstance(release, dict):
-        raise ValueError("Invalid GitHub release response.")
-    assets = release.get("assets")
-    if not isinstance(assets, list):
-        raise ValueError("The GitHub release does not contain assets.")
-    for asset in assets:
-        if (
-            isinstance(asset, dict)
-            and asset.get("name") == asset_name
-            and isinstance(asset.get("id"), int)
-            and not isinstance(asset.get("id"), bool)
-        ):
-            return (
-                "https://api.github.com/repos/seanlordtrillo-ops/Clinthinker/"
-                f"releases/assets/{asset['id']}"
-            )
-    raise ValueError("The installer was not found in the GitHub release.")
-
-
-def _download_update_asset(asset_url: str, installer_path: Path) -> None:
-    installer_path.parent.mkdir(parents=True, exist_ok=True)
-    partial_path = installer_path.with_suffix(installer_path.suffix + ".part")
-    last_error = None
-    for attempt in range(4):
-        offset = partial_path.stat().st_size if partial_path.exists() else 0
-        headers = {
-            "Accept": "application/octet-stream",
-            "User-Agent": "Clinthinker",
-        }
-        if offset:
-            headers["Range"] = f"bytes={offset}-"
-        request = urllib.request.Request(asset_url, headers=headers)
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                response_headers = getattr(response, "headers", {})
-                content_range = response_headers.get("Content-Range", "")
-                resume = (
-                    offset > 0
-                    and getattr(response, "status", None) == 206
-                    and content_range.startswith(f"bytes {offset}-")
-                )
-                mode = "ab" if resume else "wb"
-                if not resume:
-                    offset = 0
-                expected_length = response_headers.get("Content-Length")
-                expected_length = (
-                    int(expected_length) if expected_length is not None else None
-                )
-                received = 0
-                with partial_path.open(mode) as installer_file:
-                    while chunk := response.read(1024 * 1024):
-                        installer_file.write(chunk)
-                        received += len(chunk)
-                if expected_length is not None and received != expected_length:
-                    raise OSError("The installer download ended before completion.")
-            partial_path.replace(installer_path)
-            return
-        except (
-            http.client.HTTPException,
-            urllib.error.HTTPError,
-            urllib.error.URLError,
-            TimeoutError,
-            OSError,
-        ) as error:
-            last_error = error
-            if attempt < 3:
-                time.sleep(2**attempt)
-    raise OSError("The installer download failed after retries.") from last_error
+    return run_all()
 
 
 @app.get("/api/updates/check")
@@ -415,7 +311,7 @@ def check_for_updates() -> dict:
             or remote_parts is None
             or remote_parts <= current_parts
             or not _valid_installer_url(installer_url)
-            or (sha256 is not None and not _valid_sha256(sha256))
+            or not _valid_sha256(sha256)
         ):
             return {"available": False}
         return {
@@ -427,10 +323,71 @@ def check_for_updates() -> dict:
         return {"available": False}
 
 
+def _log_update_stage(stage: str, status: str, cause: str) -> None:
+    record = {"stage": stage, "status": status, "cause": cause}
+    logging.getLogger(_core_logging_setup.LOGGER_NAME).info(
+        "update_stage=%s",
+        json.dumps(record, sort_keys=True),
+    )
+
+
+def _update_http_failure_cause(stage: str, error: HTTPException) -> str:
+    if stage == "check for update" and error.status_code == 403:
+        return "request header is missing or invalid"
+    if stage == "validate update info":
+        if error.status_code == 409:
+            return "no newer update is available"
+        if error.detail == "The installer URL is invalid.":
+            return "the installer link is invalid"
+        if error.detail == "The installer checksum is invalid.":
+            return "the installer checksum is missing or invalid"
+    if stage == "verify checksum" and error.detail == "The installer checksum does not match.":
+        return "the installer checksum did not match"
+    return "the request was rejected"
+
+
+def _raise_update_stage_failure(stage: str, error: Exception) -> None:
+    cause = update_failure_cause(stage, error)
+    _log_update_stage(stage, "failure", cause)
+    next_step = {
+        "check for update": "Check your internet connection and try again",
+        "validate update info": "Check the version, installer link, and SHA-256 information",
+        "find release on GitHub": "Check the GitHub release and try again",
+        "download": "Check your connection and try again",
+        "verify checksum": "Download the update again",
+        "back up database": "Check database availability and permissions, then try again",
+        "launch installer": "Check permissions or antivirus settings, then try again",
+    }[stage]
+    detail = f"Update failed at the {stage} step: {cause}. {next_step}."
+    raise HTTPException(status_code=500, detail=detail) from error
+
+
 @app.post("/api/updates/install")
-def install_update() -> dict:
+def install_update(request: Request) -> dict:
+    if request.headers.get("X-Clinthinker-Request") != "1":
+        _log_update_stage(
+            "check for update",
+            "failure",
+            "request header is missing or invalid",
+        )
+        raise HTTPException(status_code=403, detail="Missing required request header.")
+
     try:
-        manifest = _fetch_update_manifest()
+        with suppress_check_exception_logging():
+            manifest = _fetch_update_manifest()
+    except HTTPException as error:
+        _log_update_stage(
+            "check for update",
+            "failure",
+            _update_http_failure_cause("check for update", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("check for update", error)
+    else:
+        _log_update_stage("check for update", "success", "update information fetched")
+
+    try:
         remote_version = _version_parts(manifest.get("version"))
         current_version = _version_parts(APP_VERSION)
         if remote_version is None or current_version is None or remote_version <= current_version:
@@ -439,31 +396,157 @@ def install_update() -> dict:
         if not _valid_installer_url(installer_url):
             raise HTTPException(status_code=422, detail="The installer URL is invalid.")
         sha256 = manifest.get("sha256")
-        if sha256 is not None and not _valid_sha256(sha256):
+        if not _valid_sha256(sha256):
             raise HTTPException(status_code=422, detail="The installer checksum is invalid.")
+    except HTTPException as error:
+        _log_update_stage(
+            "validate update info",
+            "failure",
+            _update_http_failure_cause("validate update info", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("validate update info", error)
+    else:
+        _log_update_stage(
+            "validate update info",
+            "success",
+            "version, installer link, and checksum validated",
+        )
 
+    try:
+        asset_url = _github_asset_api_url(installer_url)
+    except HTTPException as error:
+        _log_update_stage(
+            "find release on GitHub",
+            "failure",
+            _update_http_failure_cause("find release on GitHub", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("find release on GitHub", error)
+    else:
+        _log_update_stage(
+            "find release on GitHub",
+            "success",
+            "release installer was found",
+        )
+
+    try:
         update_directory = Path(tempfile.gettempdir()) / "clinthinker-updates"
         installer_path = update_directory / f"Clinthinker-Setup-{manifest['version']}.exe"
+        with suppress_check_exception_logging():
+            _download_update_asset(asset_url, installer_path)
+    except HTTPException as error:
+        _log_update_stage(
+            "download",
+            "failure",
+            _update_http_failure_cause("download", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("download", error)
+    else:
+        _log_update_stage("download", "success", "installer download completed")
+
+    try:
         digest = hashlib.sha256()
-        asset_url = _github_asset_api_url(installer_url)
-        _download_update_asset(asset_url, installer_path)
         with installer_path.open("rb") as installer_file:
             while chunk := installer_file.read(1024 * 1024):
                 digest.update(chunk)
-        if sha256 is not None and digest.hexdigest().casefold() != sha256.casefold():
+        if digest.hexdigest().casefold() != sha256.casefold():
             installer_path.unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail="The installer checksum does not match.")
+    except HTTPException as error:
+        _log_update_stage(
+            "verify checksum",
+            "failure",
+            _update_http_failure_cause("verify checksum", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("verify checksum", error)
+    else:
+        _log_update_stage("verify checksum", "success", "installer checksum matched")
 
+    try:
         if not database.DB_PATH.is_file():
             raise FileNotFoundError("The local database file was not found.")
         backup_time = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         backup_path = database.STORAGE / f"assistant-{backup_time}.sqlite3"
-        shutil.copy2(database.DB_PATH, backup_path)
-        subprocess.Popen([str(installer_path)], cwd=str(update_directory))
-    except HTTPException:
+        with database.connect() as source:
+            with closing(sqlite3.connect(backup_path)) as backup:
+                source.backup(backup)
+        with closing(sqlite3.connect(backup_path)) as verified_backup:
+            integrity = verified_backup.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise sqlite3.DatabaseError("The database backup failed integrity_check.")
+        try:
+            backups = sorted(
+                (
+                    path
+                    for path in database.STORAGE.glob("assistant-*.sqlite3")
+                    if path.is_file()
+                ),
+                key=lambda path: path.stat().st_mtime_ns,
+                reverse=True,
+            )
+            for old_backup in backups[5:]:
+                old_backup.unlink()
+        except Exception as error:
+            logging.getLogger(_core_logging_setup.LOGGER_NAME).warning(
+                "Unable to prune update backups: %s", error
+            )
+    except HTTPException as error:
+        _log_update_stage(
+            "back up database",
+            "failure",
+            _update_http_failure_cause("back up database", error),
+        )
         raise
     except Exception as error:
-        raise HTTPException(status_code=500, detail="Update failed.") from error
+        _raise_update_stage_failure("back up database", error)
+    else:
+        _log_update_stage(
+            "back up database",
+            "success",
+            "database backup passed integrity check",
+        )
+
+    launch_options = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        launch_options["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+
+    try:
+        subprocess.Popen(
+            [str(installer_path), "/SILENT", "/NORESTART"],
+            cwd=str(update_directory),
+            **launch_options,
+        )
+    except HTTPException as error:
+        _log_update_stage(
+            "launch installer",
+            "failure",
+            _update_http_failure_cause("launch installer", error),
+        )
+        raise
+    except Exception as error:
+        _raise_update_stage_failure("launch installer", error)
+    else:
+        _log_update_stage("launch installer", "success", "installer process started")
+
+    shutdown_callback = getattr(app.state, "shutdown_callback", None)
+    if shutdown_callback is not None:
+        shutdown_timer = threading.Timer(1.5, shutdown_callback)
+        shutdown_timer.daemon = True
+        shutdown_timer.start()
+
     return {"started": True}
 
 
@@ -518,6 +601,10 @@ async def _receive_upload(file: UploadFile, deduplicate: bool = False) -> dict:
 
 
 @app.post("/api/upload")
+@checks(
+    expected="Uploaded file metadata",
+    probable_cause="Upload parsing or storage failed",
+)
 async def upload_material(file: UploadFile = File(...)) -> dict:
     return await _receive_upload(file)
 
@@ -741,49 +828,52 @@ async def import_training_csv(
     if Path(filename).suffix.lower() != ".csv":
         raise HTTPException(status_code=415, detail="Choose a CSV training dataset.")
     content = await read_limited(file, MAX_UPLOAD_BYTES)
-    try:
-        decoded = content.decode("utf-8-sig")
-        reader = csv.DictReader(io.StringIO(decoded), strict=True, restkey="_extra")
-        header_values = reader.fieldnames or []
-        normalized_headers = [header.strip().lower() for header in header_values if header and header.strip()]
-    except (UnicodeDecodeError, csv.Error) as error:
-        raise HTTPException(
-            status_code=422, detail="The CSV must be a valid UTF-8 file."
-        ) from error
-    if len(normalized_headers) != len(set(normalized_headers)):
-        raise HTTPException(status_code=422, detail="The CSV cannot contain duplicate column names.")
-    headers = {
-        header.strip().lower(): header
-        for header in header_values
-        if header and header.strip()
-    }
-    if "topic" not in headers or "text" not in headers:
-        raise HTTPException(
-            status_code=422,
-            detail="CSV must have a header row with 'topic' and 'text' columns.",
-        )
-    try:
-        examples = []
-        for row in reader:
-            if row.get("_extra") is not None:
-                raise HTTPException(
-                    status_code=422,
-                    detail="A CSV row has more values than its header columns.",
-                )
-            examples.append(
-                ((row.get(headers["text"]) or ""), (row.get(headers["topic"]) or ""))
+    def import_dataset() -> dict:
+        try:
+            decoded = content.decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(decoded), strict=True, restkey="_extra")
+            header_values = reader.fieldnames or []
+            normalized_headers = [header.strip().lower() for header in header_values if header and header.strip()]
+        except (UnicodeDecodeError, csv.Error) as error:
+            raise HTTPException(
+                status_code=422, detail="The CSV must be a valid UTF-8 file."
+            ) from error
+        if len(normalized_headers) != len(set(normalized_headers)):
+            raise HTTPException(status_code=422, detail="The CSV cannot contain duplicate column names.")
+        headers = {
+            header.strip().lower(): header
+            for header in header_values
+            if header and header.strip()
+        }
+        if "topic" not in headers or "text" not in headers:
+            raise HTTPException(
+                status_code=422,
+                detail="CSV must have a header row with 'topic' and 'text' columns.",
             )
-            if len(examples) > 50000:
-                raise HTTPException(
-                    status_code=413, detail="CSV datasets are limited to 50,000 rows."
+        try:
+            examples = []
+            for row in reader:
+                if row.get("_extra") is not None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="A CSV row has more values than its header columns.",
+                    )
+                examples.append(
+                    ((row.get(headers["text"]) or ""), (row.get(headers["topic"]) or ""))
                 )
-    except csv.Error as error:
-        raise HTTPException(status_code=422, detail="Could not parse the CSV rows.") from error
-    _validate_training_examples(examples)
-    dataset_name = (name or "").strip() or Path(filename).stem.strip()
-    if not dataset_name:
-        raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
-    return _save_training_dataset(dataset_name, "csv", examples)
+                if len(examples) > 50000:
+                    raise HTTPException(
+                        status_code=413, detail="CSV datasets are limited to 50,000 rows."
+                    )
+        except csv.Error as error:
+            raise HTTPException(status_code=422, detail="Could not parse the CSV rows.") from error
+        _validate_training_examples(examples)
+        dataset_name = (name or "").strip() or Path(filename).stem.strip()
+        if not dataset_name:
+            raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
+        return _save_training_dataset(dataset_name, "csv", examples)
+
+    return await run_in_threadpool(import_dataset)
 
 
 @app.post("/api/training-datasets/documents")
@@ -904,6 +994,12 @@ async def predict_stream(request: PredictionRequest) -> StreamingResponse:
             message = error.detail if isinstance(error, HTTPException) else str(error)
             yield f"event: error\ndata: {json.dumps({'detail': message})}\n\n"
             return
+        except Exception:
+            yield (
+                "event: error\n"
+                f"data: {json.dumps({'detail': 'Analysis failed. Please try again.'})}\n\n"
+            )
+            return
         yield f"event: result\ndata: {json.dumps(result)}\n\n"
 
     return StreamingResponse(
@@ -957,6 +1053,10 @@ def database_recent_question_topics() -> list[dict]:
 
 
 @app.post("/api/questions/generate")
+@checks(
+    expected="Generated question result",
+    probable_cause="Question generation failed",
+)
 def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
     if len(set(request.upload_ids)) != len(request.upload_ids):
         raise HTTPException(status_code=422, detail="Select each course material only once.")
@@ -1368,6 +1468,10 @@ def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
 
 
 @app.post("/api/questions/save")
+@checks(
+    expected="Saved question result",
+    probable_cause="Question saving failed",
+)
 def save_practice_questions(request: SaveQuestionsRequest) -> dict:
     batch = _question_batches.get(request.generation_id)
     if not batch:

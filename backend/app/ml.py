@@ -19,6 +19,8 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.svm import SVC
 
+from .core.checks import checks
+
 _stemmer = PorterStemmer()
 _stop_words = set(ENGLISH_STOP_WORDS)
 PREDICTION_METHOD = "TF-IDF + SVM + Naive Bayes ensemble"
@@ -456,6 +458,10 @@ def _select_decision_policy(
     return sweep, policy
 
 
+@checks(
+    expected="Classifier evaluation report",
+    probable_cause="Classifier evaluation failed",
+)
 def evaluate_classifier(
     examples: Sequence[tuple[str, str]],
     *,
@@ -912,6 +918,10 @@ def augment_training_examples_with_exam_passages(
     return augmented, added
 
 
+@checks(
+    expected="Ranked prediction list",
+    probable_cause="Prediction failed",
+)
 def predict(
     text: str,
     training_examples: Sequence[tuple[str, str]] | None = None,

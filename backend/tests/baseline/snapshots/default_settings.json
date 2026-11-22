@@ -1,0 +1,20 @@
+{
+  "appearance": "orange",
+  "language": "English",
+  "question_generation": {
+    "difficulty": "Moderate",
+    "number_of_questions": 10,
+    "priority_weights": {
+      "course_importance": 0.3,
+      "historical_frequency": 0.4,
+      "model_confidence": 0.2,
+      "recent_occurrence": 0.1
+    },
+    "question_type": "Multiple Choice",
+    "questions_per_topic": 3,
+    "similarity_threshold": 0.82,
+    "topic": "All Topics",
+    "training_dataset_id": "builtin",
+    "upload_ids": null
+  }
+}

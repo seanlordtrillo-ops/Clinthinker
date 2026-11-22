@@ -42,7 +42,10 @@ export const api = {
     return startupUpdateCheck;
   },
   checkForUpdates: () => apiRequest("/api/updates/check"),
-  installUpdate: () => apiRequest("/api/updates/install", { method: "POST" }),
+  installUpdate: () => apiRequest("/api/updates/install", {
+    method: "POST",
+    headers: { "X-Clinthinker-Request": "1" }
+  }),
   uploads: () => apiRequest("/api/uploads"),
   trainingDatasets: () => apiRequest("/api/training-datasets"),
   evaluateTrainingDataset: (trainingDatasetId) => apiRequest("/api/training-datasets/evaluate", {

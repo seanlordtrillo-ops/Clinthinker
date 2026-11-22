@@ -6,6 +6,7 @@ import logging
 import math
 import random
 import re
+from threading import Lock
 import uuid
 from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
@@ -20,6 +21,7 @@ from .ml import (
     get_decision_policy,
     predict_distributions,
 )
+from .core.checks import checks
 
 logger = logging.getLogger(__name__)
 
@@ -102,13 +104,15 @@ _PAGE_NUMBER_LINE = re.compile(
 
 
 _EXAM_QUESTION_PATTERN_CACHE: OrderedDict[str, list[dict]] = OrderedDict()
+_EXAM_QUESTION_PATTERN_CACHE_LOCK = Lock()
 
 
 def _cache_exam_question_patterns(key: str, patterns: list[dict]) -> None:
-    _EXAM_QUESTION_PATTERN_CACHE[key] = patterns
-    _EXAM_QUESTION_PATTERN_CACHE.move_to_end(key)
-    while len(_EXAM_QUESTION_PATTERN_CACHE) > 4:
-        _EXAM_QUESTION_PATTERN_CACHE.popitem(last=False)
+    with _EXAM_QUESTION_PATTERN_CACHE_LOCK:
+        _EXAM_QUESTION_PATTERN_CACHE[key] = patterns
+        _EXAM_QUESTION_PATTERN_CACHE.move_to_end(key)
+        while len(_EXAM_QUESTION_PATTERN_CACHE) > 4:
+            _EXAM_QUESTION_PATTERN_CACHE.popitem(last=False)
 
 
 def validate_weights(weights: Mapping[str, float] | None) -> dict[str, float]:
@@ -722,9 +726,13 @@ def extract_exam_question_patterns(
         cache_digest.update(b"\0")
     cache_digest.update(repr(sorted(policy.items())).encode("utf-8"))
     cache_key = cache_digest.hexdigest()
-    if cache_key in _EXAM_QUESTION_PATTERN_CACHE:
-        _EXAM_QUESTION_PATTERN_CACHE.move_to_end(cache_key)
-        return [dict(item) for item in _EXAM_QUESTION_PATTERN_CACHE[cache_key]]
+    with _EXAM_QUESTION_PATTERN_CACHE_LOCK:
+        cached_patterns = None
+        if cache_key in _EXAM_QUESTION_PATTERN_CACHE:
+            _EXAM_QUESTION_PATTERN_CACHE.move_to_end(cache_key)
+            cached_patterns = _EXAM_QUESTION_PATTERN_CACHE[cache_key]
+    if cached_patterns is not None:
+        return [dict(item) for item in cached_patterns]
 
     stems = []
     for source in exam_sources:
@@ -1284,6 +1292,10 @@ def question_preference_score(
     return sum(scores) / len(scores) if scores else 0.0
 
 
+@checks(
+    expected="Generated question result",
+    probable_cause="Question generation failed",
+)
 def generate_questions(
     *,
     requested_count: int,

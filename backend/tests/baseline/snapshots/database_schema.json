@@ -1,0 +1,627 @@
+{
+  "analyses": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": "'Uploaded materials'",
+        "name": "source_label",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "predictions",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": "'TF-IDF + SVM + Naive Bayes ensemble'",
+        "name": "method",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": "'builtin'",
+        "name": "training_dataset_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": "'Built-in examples'",
+        "name": "training_dataset_name",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt_value": "datetime('now')",
+        "name": "created_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE analyses (\n                id TEXT PRIMARY KEY,\n                source_label TEXT NOT NULL DEFAULT 'Uploaded materials',\n                predictions TEXT NOT NULL,\n                method TEXT NOT NULL DEFAULT 'TF-IDF + SVM + Naive Bayes ensemble',\n                training_dataset_id TEXT NOT NULL DEFAULT 'builtin',\n                training_dataset_name TEXT NOT NULL DEFAULT 'Built-in examples',\n                created_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  },
+  "generated_questions": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "question_text",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "question_type",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "topic",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "difficulty",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "choices",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt_value": null,
+        "name": "correct_answer",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt_value": null,
+        "name": "priority_score",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 8,
+        "dflt_value": null,
+        "name": "confidence_score",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 9,
+        "dflt_value": null,
+        "name": "source_dataset_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 10,
+        "dflt_value": null,
+        "name": "source_dataset_name",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 11,
+        "dflt_value": null,
+        "name": "source_material_id",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 12,
+        "dflt_value": null,
+        "name": "source_material_name",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 13,
+        "dflt_value": null,
+        "name": "source_reference",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 14,
+        "dflt_value": "datetime('now')",
+        "name": "created_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 15,
+        "dflt_value": null,
+        "name": "session_id",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE generated_questions (\n                id TEXT PRIMARY KEY,\n                question_text TEXT NOT NULL,\n                question_type TEXT NOT NULL,\n                topic TEXT NOT NULL,\n                difficulty TEXT NOT NULL,\n                choices TEXT NOT NULL,\n                correct_answer TEXT NOT NULL,\n                priority_score REAL NOT NULL,\n                confidence_score REAL NOT NULL,\n                source_dataset_id TEXT NOT NULL,\n                source_dataset_name TEXT NOT NULL,\n                source_material_id TEXT,\n                source_material_name TEXT NOT NULL,\n                source_reference TEXT NOT NULL,\n                created_at TEXT NOT NULL DEFAULT (datetime('now')),\n                session_id TEXT\n            )"
+  },
+  "model_calibration": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "dataset_id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "dataset_hash",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "svm_temperature",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "ensemble_temperature",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "confidence_threshold",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "min_margin",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 6,
+        "dflt_value": null,
+        "name": "disagreement_abstain",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 7,
+        "dflt_value": null,
+        "name": "target_precision",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 8,
+        "dflt_value": null,
+        "name": "low_reliability",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 9,
+        "dflt_value": null,
+        "name": "sklearn_version",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 10,
+        "dflt_value": "datetime('now')",
+        "name": "created_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE model_calibration (\n                dataset_id TEXT PRIMARY KEY,\n                dataset_hash TEXT NOT NULL,\n                svm_temperature REAL NOT NULL,\n                ensemble_temperature REAL NOT NULL,\n                confidence_threshold REAL NOT NULL,\n                min_margin REAL NOT NULL,\n                disagreement_abstain INTEGER NOT NULL,\n                target_precision REAL NOT NULL,\n                low_reliability INTEGER NOT NULL,\n                sklearn_version TEXT NOT NULL,\n                created_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  },
+  "question_feedback": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "question_id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "rating",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "question_type",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "difficulty",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "wording_pattern",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": "'medium'",
+        "name": "question_length",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt_value": "'single-term'",
+        "name": "answer_length",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt_value": "datetime('now')",
+        "name": "rated_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE question_feedback (\n                question_id TEXT PRIMARY KEY,\n                rating INTEGER NOT NULL CHECK(rating IN (-1, 1)),\n                question_type TEXT NOT NULL,\n                difficulty TEXT NOT NULL,\n                wording_pattern TEXT NOT NULL,\n                question_length TEXT NOT NULL DEFAULT 'medium',\n                answer_length TEXT NOT NULL DEFAULT 'single-term',\n                rated_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  },
+  "saved_sessions": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "title",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": "datetime('now')",
+        "name": "created_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "topic",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "source_file",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "difficulty",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt_value": null,
+        "name": "question_type",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt_value": "0",
+        "name": "question_count",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE saved_sessions (\n                id TEXT PRIMARY KEY,\n                title TEXT NOT NULL,\n                created_at TEXT NOT NULL DEFAULT (datetime('now')),\n                topic TEXT NOT NULL,\n                source_file TEXT NOT NULL,\n                difficulty TEXT NOT NULL,\n                question_type TEXT NOT NULL,\n                question_count INTEGER NOT NULL DEFAULT 0\n            )"
+  },
+  "settings": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "value",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE settings (\n                id INTEGER PRIMARY KEY CHECK(id = 1),\n                value TEXT NOT NULL\n            )"
+  },
+  "training_datasets": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "name",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "source_type",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": "datetime('now')",
+        "name": "created_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE training_datasets (\n                id TEXT PRIMARY KEY,\n                name TEXT NOT NULL,\n                source_type TEXT NOT NULL,\n                created_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  },
+  "training_examples": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "dataset_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "topic",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "text",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "source_material_id",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "source_material_name",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt_value": null,
+        "name": "source_reference",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [
+      {
+        "from": "dataset_id",
+        "id": 0,
+        "match": "NONE",
+        "on_delete": "CASCADE",
+        "on_update": "NO ACTION",
+        "seq": 0,
+        "table": "training_datasets",
+        "to": "id"
+      }
+    ],
+    "sql": "CREATE TABLE training_examples (\n                id TEXT PRIMARY KEY,\n                dataset_id TEXT NOT NULL REFERENCES training_datasets(id) ON DELETE CASCADE,\n                topic TEXT NOT NULL,\n                text TEXT NOT NULL,\n                source_material_id TEXT,\n                source_material_name TEXT,\n                source_reference TEXT\n            )"
+  },
+  "uploads": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "name",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "stored_path",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "bytes",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "text_chars",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "is_exam",
+        "notnull": 0,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 6,
+        "dflt_value": "datetime('now')",
+        "name": "uploaded_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE uploads (\n                id TEXT PRIMARY KEY,\n                name TEXT NOT NULL,\n                stored_path TEXT NOT NULL,\n                bytes INTEGER NOT NULL,\n                text_chars INTEGER NOT NULL,\n                is_exam INTEGER,\n                uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  }
+}

@@ -40,7 +40,7 @@ folder. The outputs are:
 
 ```text
 release\Clinthinker©\Clinthinker©.exe
-release\Clinthinker-Setup-2.0.4.exe
+release\Clinthinker-Setup-2.0.5.exe
 ```
 
 Keep the entire generated app folder together when moving or sharing it,
@@ -64,13 +64,14 @@ artifacts without changing shortcuts on the build machine.
 
 ## Run from source
 
-Install the backend dependencies and start the API:
+The pinned dependency versions were generated with Python 3.14.3. Install the
+backend dependencies and start the API:
 
 ```powershell
+python -m venv backend\.venv
+.\backend\.venv\Scripts\Activate.ps1
+python -m pip install -c backend/constraints.txt -r backend/requirements.txt
 cd backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -78,7 +79,7 @@ In another terminal, build the desktop app and serve the interface:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run build
 npm run preview -- --host 127.0.0.1 --port 4173
 ```

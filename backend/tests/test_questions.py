@@ -1,6 +1,8 @@
 import io
+import threading
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from app import database, main
 from app.questions import (
+    _EXAM_QUESTION_PATTERN_CACHE,
+    _EXAM_QUESTION_PATTERN_CACHE_LOCK,
     _definition,
     _definition_category,
     _distractor_matches_stem_category,
@@ -907,6 +911,55 @@ class PracticeQuestionUnitTests(unittest.TestCase):
             templates = extract_exam_question_patterns(exam_sources, TRAINING)
         self.assertEqual(len(templates), 1)
         self.assertEqual(templates[0]["frequency"], 1)
+
+    def test_exam_question_pattern_cache_is_thread_safe_and_bounded(self):
+        with _EXAM_QUESTION_PATTERN_CACHE_LOCK:
+            original_cache = _EXAM_QUESTION_PATTERN_CACHE.copy()
+            _EXAM_QUESTION_PATTERN_CACHE.clear()
+
+        start = threading.Barrier(8)
+
+        def extract_patterns(worker_index):
+            start.wait(timeout=10)
+            for call_index in range(200):
+                key = (worker_index + call_index) % 8
+                source = {
+                    "name": f"Networks_Exam_{key}.pdf",
+                    "text": (
+                        f"Which of the following network concepts routes packet {key} "
+                        "across connected networks?"
+                    ),
+                }
+                extract_exam_question_patterns([source], TRAINING)
+                with _EXAM_QUESTION_PATTERN_CACHE_LOCK:
+                    self.assertLessEqual(len(_EXAM_QUESTION_PATTERN_CACHE), 4)
+
+        try:
+            with (
+                patch("app.questions.get_decision_policy", return_value={}),
+                patch(
+                    "app.questions.predict_distributions",
+                    side_effect=lambda texts, *args, **kwargs: [
+                        [{"topic": "Networking", "confidence": 0.9}]
+                        for _ in texts
+                    ],
+                ),
+                patch(
+                    "app.questions.classify_with_policy",
+                    return_value={"topic": "Networking"},
+                ),
+                ThreadPoolExecutor(max_workers=8) as executor,
+            ):
+                futures = [
+                    executor.submit(extract_patterns, worker_index)
+                    for worker_index in range(8)
+                ]
+                for future in futures:
+                    future.result()
+        finally:
+            with _EXAM_QUESTION_PATTERN_CACHE_LOCK:
+                _EXAM_QUESTION_PATTERN_CACHE.clear()
+                _EXAM_QUESTION_PATTERN_CACHE.update(original_cache)
 
     def test_generation_writes_a_concept_question_without_pasting_the_source(self):
         result = self.generate(
