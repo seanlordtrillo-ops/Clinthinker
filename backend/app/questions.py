@@ -918,7 +918,10 @@ def generate_questions(
     for candidate in candidates:
         if len(accepted) >= requested_count:
             break
-        if counts[candidate["topic"]] >= per_topic:
+        # "Unclassified" is not a real topic, so in lesson mode it is not limited by the per-topic cap.
+        if counts[candidate["topic"]] >= per_topic and not (
+            lesson_mode and candidate["topic"] == "Unclassified"
+        ):
             diagnostics["per_topic_limit_reached"] += 1
             continue
         excerpt_key = normalize_excerpt(candidate["support_excerpt"])

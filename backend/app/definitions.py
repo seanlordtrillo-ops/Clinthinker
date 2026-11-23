@@ -53,7 +53,18 @@ _INCOMPLETE_ENDINGS = re.compile(
     re.IGNORECASE,
 )
 
+_APPOSITIVE = re.compile(
+    r"^(?:(?:a|an|the)\s+)?[A-Za-z][\w /-]{2,60}?,\s+or\s+([A-Z][\w-]{1,10}),\s+(?=(?:is|are)\s)"
+)
+_NOT_A_DEFINITION_START = re.compile(
+    r"^(?:also|much|more|less|faster|slower|about|measured|made|often|usually|very)\b",
+    re.IGNORECASE,
+)
+
+
 def _definition(sentence: str) -> tuple[str, str] | None:
+    # "The central processing unit, or CPU, is ..." -> "CPU is ..."
+    sentence = _APPOSITIVE.sub(lambda m: m.group(1) + " ", sentence.strip())
     match = _DEFINITION.match(sentence.strip().rstrip("."))
     if not match:
         return None
@@ -69,6 +80,7 @@ def _definition(sentence: str) -> tuple[str, str] | None:
         or len(explanation) < 12
         or _INCOMPLETE_ENDINGS.search(explanation.rstrip(".!?"))
         or term.casefold() == explanation.casefold()
+        or _NOT_A_DEFINITION_START.match(explanation)
     ):
         return None
     return term, explanation
@@ -289,6 +301,12 @@ def _question_from_definition_raw(term: str, explanation: str, order: int) -> st
     )
     if ability:
         return f"Which term describes the ability of {ability.group(1).strip()}?"
+
+    # General fallback for any other noun-phrase definition ("a ...", "an ...", "the ...").
+    if re.match(r"^(?:a|an|the)\s+\S+(?:\s+\S+){2,}", explanation, re.IGNORECASE) and not re.search(
+        r",\s+(?:and|but|or)\s+|\b(?:on|in|at|to|for|of|with|by|from)$", explanation, re.IGNORECASE
+    ):
+        return f"Which term refers to {explanation}?"
 
     return None
 

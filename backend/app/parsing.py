@@ -96,7 +96,9 @@ def extract_text(filename: str, content: bytes) -> str:
         raise HTTPException(
             status_code=422, detail=f"No readable text was found in {filename}."
         )
-    return text
+    # PDFs break lines in the middle of sentences. Join a line to the next one when it
+    # does not end a sentence and the next line starts with a lowercase letter.
+    return re.sub(r"(?<![.!?:])\n(?=[a-z])", " ", text)
 
 
 def extract_lesson_features(filename: str, content: bytes) -> dict[str, list[str]]:
