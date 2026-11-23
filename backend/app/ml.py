@@ -149,8 +149,8 @@ def _fit_models(examples: tuple[tuple[str, str], ...]):
 
 
 def _get_models(examples: tuple[tuple[str, str], ...]):
-    if len(examples) > 2000:
-        return _fit_uncached_models(examples)
+    # Always reuse the trained model. Before, datasets over 2,000 rows were retrained on every
+    # call, and lesson ranking makes one call per lesson passage (over 100 retrains per request).
     return _fit_models(examples)
 
 
@@ -726,10 +726,7 @@ def predict_distributions(
             raise ValueError("Training data has no readable words after text cleaning.") from error
         raise
     fit_elapsed = time.perf_counter() - fit_started
-    cache_hit = (
-        len(examples) <= 2000
-        and _fit_models.cache_info().hits > cache_hits_before
-    )
+    cache_hit = _fit_models.cache_info().hits > cache_hits_before
     if training_metrics is not None:
         training_metrics["fit_seconds"] = (
             training_metrics.get("fit_seconds", 0.0)

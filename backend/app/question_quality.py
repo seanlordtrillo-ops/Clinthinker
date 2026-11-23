@@ -75,7 +75,19 @@ def definition_record(
 ) -> dict | None:
     match = _DEFINITION.match(sentence.strip().rstrip("."))
     if not match:
-        return None
+        dash = _dash_definition(sentence)
+        if not dash:
+            return None
+        # "means:" matches the wording of _statement_from_definition for dash lines,
+        # so true/false swaps only borrow from other "Term — description" lines.
+        return {
+            "term": dash[0],
+            "verb": "means:",
+            "explanation": str(dash[1]),
+            "source_id": source_id,
+            "source_kind": source_kind,
+            "topic": topic,
+        }
     return {
         "term": re.sub(r"\s+", " ", match.group("term")).strip(),
         "verb": re.sub(r"\s+", " ", match.group("verb")).casefold(),
@@ -85,5 +97,6 @@ def definition_record(
         "topic": topic,
     }
 
+from .definitions import _dash_definition
 from .distractors import rank_distractors
 from .true_false import clean_statement, swap_false_statement

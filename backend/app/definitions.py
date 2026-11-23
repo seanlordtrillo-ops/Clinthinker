@@ -62,12 +62,59 @@ _NOT_A_DEFINITION_START = re.compile(
 )
 
 
+class _Description(str):
+    """Explanation taken from a "Term — description" line.
+
+    Lessons often list definitions as "Persona — a fictional user profile" or
+    "Closure — the mind completes incomplete shapes". The text after the dash can be
+    a noun phrase or a whole clause, so these get wording that works for both.
+    """
+
+
+_DASH_DEFINITION = re.compile(
+    r"^(?P<term>[A-Z][\w'’/&+.-]*(?:\s+[\w'’/&+.-]+){0,3}(?:\s+\([^()]{1,40}\))?)"
+    r"\s+(?:—|–|--|-)\s+(?P<explanation>[^—–]{12,300})$"
+)
+
+
+_DOCUMENT_PART_WORDS = {
+    "activity", "chapter", "figure", "lecture", "lesson", "module", "page", "part",
+    "section", "step", "table", "topic", "unit", "week",
+}
+
+
+def _dash_definition(sentence: str) -> tuple[str, str] | None:
+    """Read a "Term — description" line (em dash, en dash or spaced hyphen)."""
+    match = _DASH_DEFINITION.match(sentence.strip().rstrip("."))
+    if not match:
+        return None
+    term = re.sub(r"\s+", " ", match.group("term")).strip()
+    explanation = re.sub(r"\s+", " ", match.group("explanation")).strip()
+    core_words = re.sub(r"\s*\([^()]*\)", "", term).split()
+    explanation_words = re.findall(r"[A-Za-z][\w'’-]*", explanation)
+    title_case_words = sum(word[0].isupper() for word in explanation_words)
+    if (
+        len(term) < 3
+        or not core_words
+        or core_words[0].casefold() in _INVALID_TERM_STARTS
+        # Headings such as "Chapter 2 - Introduction to Computer Hardware" are not definitions.
+        or core_words[0].casefold() in _DOCUMENT_PART_WORDS
+        or any(word.isdigit() for word in core_words)
+        or title_case_words >= max(2, 0.6 * len(explanation_words))
+        or len(explanation.split()) < 3
+        or '"' in explanation
+        or _INCOMPLETE_ENDINGS.search(explanation.rstrip(".!?"))
+    ):
+        return None
+    return term, _Description(explanation)
+
+
 def _definition(sentence: str) -> tuple[str, str] | None:
     # "The central processing unit, or CPU, is ..." -> "CPU is ..."
     sentence = _APPOSITIVE.sub(lambda m: m.group(1) + " ", sentence.strip())
     match = _DEFINITION.match(sentence.strip().rstrip("."))
     if not match:
-        return None
+        return _dash_definition(sentence)
     term = re.sub(r"\s+", " ", match.group(1)).strip(" -")
     explanation = re.sub(r"\s+", " ", match.group(2)).strip()
     term_words = term.split()
@@ -203,7 +250,17 @@ def _is_concept_term(term: str) -> bool:
         and not any(word in _PRONOUNS for word in words)
     )
 
+def _stem_article(category: str) -> str:
+    """Return "a " for a stem, or "" when the category is plural or an -ing word."""
+    first = category.split()[0].casefold()
+    if first.endswith("ing") or (first.endswith("s") and not first.endswith(("ss", "us", "is"))):
+        return ""
+    return "a "
+
+
 def _question_from_definition_raw(term: str, explanation: str, order: int) -> str | None:
+    if isinstance(explanation, _Description):
+        return f'Which term matches this description: "{explanation.rstrip(".!?")}"?'
     explanation = re.sub(r"\s+", " ", explanation).strip().rstrip(".!?")
     example = re.fullmatch(r"(?:an?|the)\s+example\s+of\s+(.+)", explanation, re.IGNORECASE)
     if example:
@@ -240,7 +297,7 @@ def _question_from_definition_raw(term: str, explanation: str, order: int) -> st
         category = in_which_clause.group("category").strip()
         connector = in_which_clause.group("connector").casefold()
         clause = in_which_clause.group("clause").strip().rstrip(".!?")
-        return f"Which term describes a {category} {connector} {clause}?"
+        return f"Which term describes {_stem_article(category)}{category} {connector} {clause}?"
 
     relative_clause = re.match(
         r"^(?:(?:a|an|the)\s+)?(?P<category>[\w-]+(?:\s+[\w-]+){0,4}?)\s+"
@@ -255,7 +312,7 @@ def _question_from_definition_raw(term: str, explanation: str, order: int) -> st
             return None
         if category.casefold() in {"research", "study"}:
             return f"Which type of {category} {clause}?"
-        return f"Which term describes a {category} that {clause}?"
+        return f"Which term describes {_stem_article(category)}{category} that {clause}?"
 
     instrument = re.match(
         r"^(?:a|an|the)\s+(?P<category>instrument|tool|method)\s+"
@@ -302,12 +359,6 @@ def _question_from_definition_raw(term: str, explanation: str, order: int) -> st
     if ability:
         return f"Which term describes the ability of {ability.group(1).strip()}?"
 
-    # General fallback for any other noun-phrase definition ("a ...", "an ...", "the ...").
-    if re.match(r"^(?:a|an|the)\s+\S+(?:\s+\S+){2,}", explanation, re.IGNORECASE) and not re.search(
-        r",\s+(?:and|but|or)\s+|\b(?:on|in|at|to|for|of|with|by|from)$", explanation, re.IGNORECASE
-    ):
-        return f"Which term refers to {explanation}?"
-
     return None
 
 def _question_from_definition(term: str, explanation: str, order: int) -> str | None:
@@ -315,6 +366,8 @@ def _question_from_definition(term: str, explanation: str, order: int) -> str | 
     return _correct_indefinite_articles(question) if question else None
 
 def _statement_from_definition_raw(term: str, explanation: str) -> str:
+    if isinstance(explanation, _Description):
+        return f"{term} means: {explanation.rstrip('.!?')}."
     explanation = re.sub(r"\s+", " ", explanation).strip().rstrip(".!?")
     folded_term = term.casefold()
     if "independent variable" in folded_term:
@@ -356,12 +409,17 @@ def _statement_from_definition_raw(term: str, explanation: str) -> str:
         explanation,
         re.IGNORECASE,
     )
-    if relative_clause:
+    # "designing so that people can use it" has its own subject after "that", so it
+    # cannot become "<Term> people can use it"; it falls through to the general wording.
+    if relative_clause and not re.search(
+        r"\b(?:so|such)$", relative_clause.group("category"), re.IGNORECASE
+    ):
         clause = relative_clause.group("clause").strip().rstrip(".!?")
         subject = term[0].upper() + term[1:]
         if len(term.split()) == 1 and not term.casefold().endswith(("s", "ing")):
             article = "An" if term[0].casefold() in "aeiou" else "A"
-            subject = f"{article} {term.casefold()}"
+            name = term if any(character.isupper() for character in term[1:]) else term.casefold()
+            subject = f"{article} {name}"
         return f"{subject} {clause[0].lower() + clause[1:]}."
     return f"{term[0].upper() + term[1:]} is associated with {explanation[0].lower() + explanation[1:]}."
 
