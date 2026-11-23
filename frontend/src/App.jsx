@@ -1016,9 +1016,21 @@ export default function App() {
   return (
     <div
       className={`app-shell app-window theme-${settings.appearance}${printingSavedSessionId ? " printing-saved-session" : ""}`}
-      onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        // On the questions page, dropped files are lessons, so skip the "add course files" overlay.
+        if (page !== "Generate Practice Questions") setDragging(true);
+      }}
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
-      onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files); }}
+      onDrop={(event) => {
+        event.preventDefault();
+        setDragging(false);
+        if (page === "Generate Practice Questions") {
+          if (!busy && !lessonUploadBusy) uploadLessons(event.dataTransfer.files);
+        } else {
+          addFiles(event.dataTransfer.files);
+        }
+      }}
     >
       <Sidebar active={page} onNavigate={(next) => {
         setPage(next);
