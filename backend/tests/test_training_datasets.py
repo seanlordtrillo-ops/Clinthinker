@@ -70,19 +70,18 @@ class TrainingDatasetTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(saved["training_dataset_id"], dataset["id"])
         self.assertEqual(saved["training_dataset_name"], "botany")
-
-    def test_csv_requires_topic_and_text_columns(self):
+    def test_csv_needs_a_topic_column_and_a_text_column(self):
         self.with_isolated_storage()
         uploaded = UploadFile(
             filename="invalid.csv",
-            file=io.BytesIO(b"label,content\nPlants,green leaves\nStars,night sky\n"),
+            file=io.BytesIO(b"notes\nonly one column here\nanother row\n"),
         )
 
         with self.assertRaises(HTTPException) as error:
-            asyncio.run(main.import_training_csv(uploaded))
+            asyncio.run(main.import_training_csv(uploaded, name=None))
 
         self.assertEqual(error.exception.status_code, 422)
-        self.assertIn("'topic' and 'text'", error.exception.detail)
+        self.assertIn("at least two columns", error.exception.detail)
         self.assertEqual(len(main.list_training_datasets()), 1)
 
     def test_csv_whitespace_name_falls_back_to_file_name(self):
