@@ -412,9 +412,16 @@ export default function App() {
       setSelectedDatasetId(dataset.id);
       setQuestionDatasetId(dataset.id);
       setTrainingDatasetName("");
-      setNotice(requestedName
+      const detected = dataset.detected;
+      const details = detected
+        ? ` Topic column: ${detected.topic_column}. Text column: ${detected.text_column}.`
+          + (detected.rows_skipped ? ` ${detected.rows_skipped} incomplete rows skipped.` : "")
+          + (detected.rows_repaired ? ` ${detected.rows_repaired} rows with extra separators were joined back into the text.` : "")
+          + (detected.columns_guessed ? " The columns were guessed from the data, so check that this is right." : "")
+        : "";
+      setNotice((requestedName
         ? `Imported ${dataset.example_count} labeled rows across ${dataset.topic_count} topics.`
-        : `Dataset "${dataset.name}" created from the file name.`);
+        : `Dataset "${dataset.name}" created from the file name (${dataset.example_count} rows, ${dataset.topic_count} topics).`) + details);
     } catch (importError) {
       setError(`CSV dataset could not be imported: ${importError.message}`);
     } finally {
@@ -1961,7 +1968,7 @@ function TrainingDataPage({
             <FileUp size={15} /> Add documents
           </button>
         </div>
-        <p className="training-help">CSV format: one header row with <code>topic,text</code> columns. Uploaded documents are saved locally, but do not become an available dataset until you label them and choose <strong>Create from labeled documents</strong>.</p>
+        <p className="training-help">CSV format: one column for the topic and one for the text (for example a header row <code>topic,text</code>). Commas, semicolons or tabs, Excel and Google Sheets files, and common column names such as subject or content are detected automatically. Uploaded documents are saved locally, but do not become an available dataset until you label them and choose <strong>Create from labeled documents</strong>.</p>
         {uploads.length ? <div className="training-upload-list">
           {uploads.map((upload) => {
             const selected = selectedUploads.includes(upload.id);

@@ -31,6 +31,7 @@ from starlette.concurrency import run_in_threadpool
 from sklearn import __version__ as sklearn_version
 
 from .. import database
+from ..csv_import import CsvImportError, read_labeled_csv
 from ..database import UPLOADS, connect, get_settings, initialize, save_settings
 from ..core.checks import checks, suppress_check_exception_logging
 from ..core import errors as _core_errors
@@ -224,48 +225,15 @@ async def import_training_csv(
     content = await read_limited(file, MAX_UPLOAD_BYTES)
     def import_dataset() -> dict:
         try:
-            decoded = content.decode("utf-8-sig")
-            reader = csv.DictReader(io.StringIO(decoded), strict=True, restkey="_extra")
-            header_values = reader.fieldnames or []
-            normalized_headers = [header.strip().lower() for header in header_values if header and header.strip()]
-        except (UnicodeDecodeError, csv.Error) as error:
-            raise HTTPException(
-                status_code=422, detail="The CSV must be a valid UTF-8 file."
-            ) from error
-        if len(normalized_headers) != len(set(normalized_headers)):
-            raise HTTPException(status_code=422, detail="The CSV cannot contain duplicate column names.")
-        headers = {
-            header.strip().lower(): header
-            for header in header_values
-            if header and header.strip()
-        }
-        if "topic" not in headers or "text" not in headers:
-            raise HTTPException(
-                status_code=422,
-                detail="CSV must have a header row with 'topic' and 'text' columns.",
-            )
-        try:
-            examples = []
-            for row in reader:
-                if row.get("_extra") is not None:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="A CSV row has more values than its header columns.",
-                    )
-                examples.append(
-                    ((row.get(headers["text"]) or ""), (row.get(headers["topic"]) or ""))
-                )
-                if len(examples) > 50000:
-                    raise HTTPException(
-                        status_code=413, detail="CSV datasets are limited to 50,000 rows."
-                    )
-        except csv.Error as error:
-            raise HTTPException(status_code=422, detail="Could not parse the CSV rows.") from error
+            examples, detected = read_labeled_csv(content)
+        except CsvImportError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
         _validate_training_examples(examples)
         dataset_name = (name or "").strip() or Path(filename).stem.strip()
         if not dataset_name:
             raise HTTPException(status_code=422, detail="Enter a name for this dataset.")
-        return _main._save_training_dataset(dataset_name, "csv", examples)
+        dataset = _main._save_training_dataset(dataset_name, "csv", examples)
+        return {**dataset, "detected": detected}
 
     return await run_in_threadpool(import_dataset)
 
