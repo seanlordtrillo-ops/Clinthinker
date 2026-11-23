@@ -33,11 +33,11 @@
   },
   {
     "method": "post",
-    "path": "/api/questions/history/reset"
+    "path": "/api/questions/generate"
   },
   {
     "method": "post",
-    "path": "/api/questions/generate"
+    "path": "/api/questions/history/reset"
   },
   {
     "method": "get",

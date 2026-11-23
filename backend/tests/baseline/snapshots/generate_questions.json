@@ -70,7 +70,7 @@
   ],
   "requested_count": 4,
   "shortfall": 2,
-  "shortfall_reason": "Not enough distinct, source-supported questions passed the quality checks.",
+  "shortfall_reason": "The per-topic question cap limited the result. Raise the questions-per-topic limit or select more topics.",
   "topic_priorities": [
     {
       "course_importance_score": 0.0,

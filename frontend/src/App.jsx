@@ -552,9 +552,9 @@ export default function App() {
           upload_ids: uploads.every((upload) => questionUploadIds.includes(upload.id))
             ? null
             : questionUploadIds,
-          topic: questionForm.topic,
+          topic: "All Topics",
           question_type: questionForm.question_type,
-          difficulty: questionForm.difficulty,
+          difficulty: "Moderate",
           number_of_questions: Number(questionForm.number_of_questions),
           questions_per_topic: Number(questionForm.questions_per_topic),
           similarity_threshold: Number(questionForm.similarity_threshold) / 100,
@@ -611,9 +611,9 @@ export default function App() {
         lesson_upload_ids: useLesson ? uploadIds : [],
         lesson_only: useLesson,
         use_exam_style: useStyle,
-        topic: questionForm.topic,
+        topic: "All Topics",
         question_type: questionForm.question_type,
-        difficulty: questionForm.difficulty,
+        difficulty: "Moderate",
         number_of_questions: Number(questionForm.number_of_questions),
         questions_per_topic: Number(questionForm.questions_per_topic),
         similarity_threshold: Number(questionForm.similarity_threshold) / 100,
@@ -1303,8 +1303,7 @@ function PracticeQuestionsPage({
       <div className="question-overview-grid">
         <div><span>Training dataset</span><strong>{selectedDatasetName}</strong></div>
         <div><span>Source files</span><strong>{effectiveUploadNames.length} selected</strong></div>
-        <div><span>Topic</span><strong>{form.topic}</strong></div>
-        <div><span>Question format</span><strong>{form.question_type} · {form.difficulty}</strong></div>
+        <div><span>Question format</span><strong>{form.question_type}</strong></div>
         <div><span>Question count</span><strong>{form.number_of_questions} requested · {form.questions_per_topic} per topic max</strong></div>
       </div>
       <div className="question-overview-sources">
@@ -2070,20 +2069,9 @@ function SettingsPage({
             </option>)}
           </select>
         </label>
-        <label className="question-control"><span>Topic</span>
-          <select value={questionForm.topic} onChange={(event) => setQuestionField("topic", event.target.value)}>
-            <option>All Topics</option>
-            {topics.map((topic) => <option key={topic}>{topic}</option>)}
-          </select>
-        </label>
         <label className="question-control"><span>Question type</span>
           <select value={questionForm.question_type} onChange={(event) => setQuestionField("question_type", event.target.value)}>
             {["Multiple Choice", "True or False", "Identification"].map((type) => <option key={type}>{type}</option>)}
-          </select>
-        </label>
-        <label className="question-control"><span>Difficulty</span>
-          <select value={questionForm.difficulty} onChange={(event) => setQuestionField("difficulty", event.target.value)}>
-            {["Easy", "Moderate", "Difficult"].map((level) => <option key={level}>{level}</option>)}
           </select>
         </label>
         <label className="question-control"><span>Number of questions</span>
@@ -2095,8 +2083,6 @@ function SettingsPage({
             onChange={(event) => setQuestionField("questions_per_topic", event.target.value)} />
         </label>
       </div>
-      <p className="question-difficulty-note">Difficulty is estimated from sentence length and complexity. Sources also need at least 45% model relevance for the selected dataset.</p>
-
       <div className="question-source-picker">
         <div className="question-subheading">
           <strong>Course materials used as question sources</strong>
