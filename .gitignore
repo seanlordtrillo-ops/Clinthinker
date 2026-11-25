@@ -19,3 +19,6 @@
 *.EXE
 uun the app for me
 testing/
+
+*.patch
+*.pdf
