@@ -31,6 +31,7 @@ from .question_quality import (
 
 
 from .text_cleaning import _SENTENCE_END, split_sentences, strip_document_headers
+from .lesson_structure import sentence_headings
 from .definitions import (
     _article_for,
     _correct_indefinite_articles,
@@ -38,6 +39,9 @@ from .definitions import (
     _definition_category,
     _definition_headword,
     _is_concept_term,
+    _choice_without_note,
+    _description_question,
+    _Description,
     _normalize_choice,
     _question_from_definition,
     _question_from_definition_raw,
@@ -145,6 +149,63 @@ DEFAULT_SIMILARITY_THRESHOLD = 0.82
 
 
 
+def source_key_for(source: Mapping) -> tuple[str, str]:
+    return (
+        str(source.get("kind", "course")),
+        str(source.get("id") or source.get("name") or ""),
+    )
+
+
+def _sentence_block(
+    headings_by_source: Mapping[tuple[str, str], Sequence[str | None]],
+    source_key: tuple[str, str],
+    order: int,
+) -> tuple[str, str | None]:
+    """(source id, heading) of the list a sentence belongs to."""
+    headings = headings_by_source.get(source_key, ())
+    return (source_key[1], headings[order] if 0 <= order < len(headings) else None)
+
+
+def _definition_question(
+    term: str,
+    explanation: str,
+    order: int,
+    list_heading: str | None,
+    seed: str,
+) -> str | None:
+    """Stem for a definition. "Term — description" lines get varied wording and,
+    when they belong to a list, the list's heading for context."""
+    if isinstance(explanation, _Description):
+        return _description_question(explanation, list_heading, seed)
+    return _question_from_definition(term, explanation, order)
+
+
+def _list_terms(records: Sequence[Mapping], block: tuple | None) -> frozenset[str]:
+    if not block:
+        return frozenset()
+    return frozenset(
+        _choice_without_note(_normalize_choice(str(record["term"]))).casefold()
+        for record in records
+        if record.get("block") == block
+    )
+
+
+def _options_without_notes(
+    answer_term: str,
+    distractors: Sequence[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Drop bracketed notes from wrong options and remove any that then repeat."""
+    seen = {_choice_without_note(_normalize_choice(answer_term)).casefold()}
+    options = []
+    for distractor, explanation in distractors:
+        option = _choice_without_note(distractor)
+        if option.casefold() in seen:
+            continue
+        seen.add(option.casefold())
+        options.append((option, explanation))
+    return options
+
+
 @checks(
     expected="Generated question result",
     probable_cause="Question generation failed",
@@ -211,6 +272,15 @@ def generate_questions(
     if len(combined_source) > 500_000:
         raise ValueError("Selected source text exceeds the 500,000 character analysis limit.")
 
+    # The heading each sentence sits under, so related list items can be grouped.
+    headings_by_source: dict[tuple[str, str], list[str | None]] = {}
+    for source in sources:
+        text = str(source.get("text", ""))
+        headings_by_source[(
+            str(source.get("kind", "course")),
+            str(source.get("id") or source.get("name") or ""),
+        )] = sentence_headings(text, _SENTENCE_END.split(text))
+
     all_definition_records = []
     lesson_definition_records = []
     if lesson_mode:
@@ -219,7 +289,8 @@ def generate_questions(
             if source_kind not in {"course", "lesson"}:
                 continue
             source_id = str(source.get("id") or source.get("name") or "")
-            for raw_sentence in _SENTENCE_END.split(str(source.get("text", ""))):
+            source_headings = headings_by_source.get((source_kind, source_id), [])
+            for raw_index, raw_sentence in enumerate(_SENTENCE_END.split(str(source.get("text", "")))):
                 sentence = raw_sentence.strip(" \t-•")
                 if not _definition(sentence):
                     continue
@@ -229,6 +300,10 @@ def generate_questions(
                     source_kind=source_kind,
                 )
                 if record:
+                    record["block"] = (
+                        source_id,
+                        source_headings[raw_index] if raw_index < len(source_headings) else None,
+                    )
                     all_definition_records.append(record)
                     lesson_definition_records.append(record)
 
@@ -312,6 +387,7 @@ def generate_questions(
                 topic=best["topic"],
             )
             if record:
+                record["block"] = _sentence_block(headings_by_source, source_key, source_order)
                 all_definition_records.append(record)
                 if source_key[0] in {"course", "lesson"}:
                     lesson_definition_records.append(record)
@@ -331,11 +407,21 @@ def generate_questions(
                 training_definitions_by_topic.setdefault(topic.strip(), []).append(
                     definition
                 )
+    block_sizes = Counter(
+        record.get("block")
+        for record in {
+            (record.get("block"), record["term"].casefold()): record
+            for record in all_definition_records
+            if record.get("block") and record["block"][1]
+        }.values()
+    )
     candidates: list[dict] = []
     candidate_distractor_pools: dict[str, list[tuple[str, str]]] = {}
     request_random = random.Random(random_seed if random_seed is not None else 0)
     eligible_sentence_count = sum(candidate[3] for candidate in candidate_sources)
     for source, sentence, definition, eligible, best, source_order in classified:
+        block = _sentence_block(headings_by_source, source_key_for(source), source_order)
+        list_heading = block[1] if block_sizes.get(block, 0) >= 2 else None
         if not eligible:
             continue
         if best["topic"] not in allowed_topics:
@@ -390,7 +476,7 @@ def generate_questions(
             if not _is_concept_term(term):
                 diagnostics["not_definition"] += 1
                 continue
-            question = _question_from_definition(term, explanation, source_order)
+            question = _definition_question(term, explanation, source_order, list_heading, sentence)
             if not question:
                 diagnostics["no_natural_stem"] += 1
                 continue
@@ -429,10 +515,17 @@ def generate_questions(
                         for distractor, distractor_explanation in terms
                     )
                 ]
+                # Terms from the same list (same heading) come first, so every option
+                # is the same kind of thing: SDLC phases with SDLC phases, and so on.
+                same_list = [
+                    record for record in all_definition_records
+                    if list_heading and record.get("block") == block
+                ]
                 tiers = (
-                    [same_source_topic, same_lesson, any_lesson]
+                    [same_list, same_source_topic, same_lesson, any_lesson]
                     if lesson_mode
                     else [
+                        same_list,
                         [
                             {
                                 "term": distractor,
@@ -502,6 +595,7 @@ def generate_questions(
                             continue
                         seen_terms.add(folded)
                         distractors.append((distractor, distractor_explanation))
+                distractors = _options_without_notes(term, distractors)
                 if len(distractors) < 3:
                     supported_statement = clean_statement(
                         _statement_from_definition(term, explanation)
@@ -537,7 +631,7 @@ def generate_questions(
                     excerpt = explanation
                 else:
                     wrong = [item[0] for item in distractors[:3]]
-                    answer = _normalize_choice(term)
+                    answer = _choice_without_note(_normalize_choice(term))
                     choices = [answer, *wrong]
                     seed = int(hashlib.sha256(sentence.encode("utf-8")).hexdigest()[:8], 16)
                     random.Random(seed ^ uuid.uuid4().int).shuffle(choices)
@@ -575,6 +669,9 @@ def generate_questions(
             "source_content": str(source.get("text", "")),
             "lesson_order": source_order,
             "_alternate_form": candidate_question_type != question_type,
+            "_block": block if definition else None,
+            "_list_heading": list_heading if definition else None,
+            "_same_list_terms": _list_terms(all_definition_records, block if list_heading else None),
             "_fallback_form": fallback_to_true_false,
             "created_at": None,
         }
@@ -643,14 +740,25 @@ def generate_questions(
         elif candidate["question_type"] == "True or False":
             if not _is_concept_term(term):
                 continue
-            question = _question_from_definition(
-                term, explanation, int(candidate.get("lesson_order", 0))
+            question = _definition_question(
+                term,
+                explanation,
+                int(candidate.get("lesson_order", 0)),
+                candidate.get("_list_heading"),
+                candidate["cited_passage"],
             )
             if not question:
                 continue
             distractors = []
             seen_terms = {re.sub(r"\s+", " ", term).strip().casefold()}
-            for record in rank_distractors(term, all_definition_records):
+            same_list = [
+                record for record in all_definition_records
+                if candidate.get("_list_heading") and record.get("block") == candidate.get("_block")
+            ]
+            for record in [
+                *rank_distractors(term, same_list),
+                *rank_distractors(term, all_definition_records),
+            ]:
                 distractor = _normalize_choice(str(record["term"]))
                 folded = re.sub(r"\s+", " ", distractor).strip().casefold()
                 if (
@@ -672,6 +780,8 @@ def generate_questions(
                 seen_terms.add(folded)
                 distractors.append((distractor, str(record["explanation"])))
             if len(distractors) == 3:
+                distractors = _options_without_notes(term, distractors)
+            if len(distractors) == 3:
                 alternate = {
                     **candidate,
                     "id": f"{candidate['id']}:multiple-choice",
@@ -679,7 +789,7 @@ def generate_questions(
                     "question_text": question,
                     "question_type": "Multiple Choice",
                     "choices": [],
-                    "correct_answer": _normalize_choice(term),
+                    "correct_answer": _choice_without_note(_normalize_choice(term)),
                     "supported_statement": None,
                     "false_statement": None,
                     "false_basis": None,
@@ -935,6 +1045,7 @@ def generate_questions(
         }
         selected_option_set = None
         if candidate["question_type"] == "Multiple Choice":
+            same_list_terms = candidate.get("_same_list_terms", frozenset())
             eligible_options = [
                 distractor
                 for distractor, _ in candidate_distractor_pools.get(candidate["id"], [])
@@ -943,7 +1054,7 @@ def generate_questions(
                     candidate["correct_answer"],
                     candidate["question_text"],
                     candidate["cited_passage"],
-                    other_answers,
+                    other_answers - same_list_terms,
                     candidate.get("source_defined_terms", ()),
                 )
                 and (
@@ -957,6 +1068,9 @@ def generate_questions(
                     is_reused_excerpt
                     or candidate.get("topic") == "Unclassified"
                     or distractor.casefold() not in used_distractors
+                    # Siblings from the same list may repeat across questions: they
+                    # are the natural options ("Planning", "Design", "Testing", …).
+                    or distractor.casefold() in same_list_terms
                 )
             ]
             selected_choices = None
@@ -1084,6 +1198,9 @@ def generate_questions(
             continue
         candidate.pop("_alternate_form", None)
         candidate.pop("_fallback_form", None)
+        candidate.pop("_block", None)
+        candidate.pop("_list_heading", None)
+        candidate.pop("_same_list_terms", None)
         accepted.append(candidate)
         accepted_excerpt_keys.add(excerpt_key)
         accepted_signatures.add(signature)

@@ -59,7 +59,25 @@ def normalize_answer(text: str) -> str:
     return cleaned.strip(" .,;:!?\"'()[]")
 
 
+def accepted_answers(correct: str) -> set[str]:
+    """Typed answers that count as correct: the full term, the term without its
+    bracketed note, or the abbreviation in the brackets.
+    "User Acceptance Testing (UAT)" accepts the full term, "User Acceptance Testing" or "UAT"."""
+    answers = {normalize_answer(correct)}
+    match = re.fullmatch(r"\s*(.*?)\s*\(([^()]*)\)\s*", str(correct or ""))
+    if match:
+        answers.add(normalize_answer(match.group(1)))
+        note = match.group(2).strip()
+        # Only abbreviations count on their own ("UAT", "PWAs"), not notes like "coding".
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9]{1,9}", note) and sum(c.isupper() for c in note) >= 2:
+            answers.add(normalize_answer(note))
+    answers.discard("")
+    return answers
+
+
 def is_correct_answer(question_type: str, chosen: str, correct: str) -> bool:
+    if question_type == "Identification":
+        return normalize_answer(chosen) in accepted_answers(correct)
     return normalize_answer(chosen) == normalize_answer(correct)
 
 

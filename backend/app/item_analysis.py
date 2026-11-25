@@ -24,7 +24,7 @@ from fastapi import HTTPException
 from .assessments import LETTERS, load_test
 from .core.checks import checks
 from .database import connect
-from .progress import normalize_answer
+from .progress import is_correct_answer, normalize_answer
 
 MAX_STUDENTS = 1000
 GROUP_SHARE = 0.27
@@ -66,7 +66,7 @@ def _grade(item: Mapping, choices: Sequence[str], raw: str) -> tuple[str | None,
         value = normalize_answer(raw)
         chosen = "True" if value in {"t", "true"} else "False" if value in {"f", "false"} else raw
         return chosen, chosen == answer
-    return raw, normalize_answer(raw) == normalize_answer(answer)
+    return raw, is_correct_answer("Identification", raw, answer)
 
 
 def parse_results(test: Mapping, content: bytes) -> tuple[list[dict], list[str]]:

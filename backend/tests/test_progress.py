@@ -78,6 +78,15 @@ class AnswerCheckingTests(ProgressTestCase):
         self.assertTrue(progress.is_correct_answer("Identification", "User   Interface", "user interface"))
         self.assertFalse(progress.is_correct_answer("Identification", "usable", "Usability"))
 
+    def test_identification_accepts_the_term_without_its_note_or_the_abbreviation(self):
+        for typed in ("User Acceptance Testing (UAT)", "user acceptance testing", "UAT"):
+            with self.subTest(typed=typed):
+                self.assertTrue(progress.is_correct_answer("Identification", typed, "User Acceptance Testing (UAT)"))
+        self.assertTrue(progress.is_correct_answer("Identification", "Implementation", "Implementation (coding)"))
+        self.assertFalse(progress.is_correct_answer("Identification", "Testing", "User Acceptance Testing (UAT)"))
+        self.assertFalse(progress.is_correct_answer("Identification", "coding", "Implementation (coding)"))
+        self.assertFalse(progress.is_correct_answer("Multiple Choice", "UAT", "User Acceptance Testing (UAT)"))
+
     def test_true_or_false_accepts_only_true_or_false(self):
         item = question(question_type="True or False")
         self.assertEqual(progress.validate_answer_format(item, "true"), "True")

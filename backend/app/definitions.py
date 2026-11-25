@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Mapping, Sequence
 
@@ -223,10 +224,18 @@ def _normalize_choice(term: str) -> str:
         return term
     words = term.split()
     normalized = []
+    # In "Augmented Reality (AR)" the capitals mark an acronym; in "CLOCK SPEED" the
+    # whole term is shouted. Keep short all-capital words only in mixed-case terms.
+    mixed_case = any(character.islower() for character in term)
     for word in words:
         clean_word = word.strip(".,;:()[]{}")
         if (
-            clean_word.casefold() in _FOLDED_ACRONYMS
+            (
+                mixed_case
+                and clean_word.isupper()
+                and 2 <= sum(character.isalpha() for character in clean_word) <= 6
+            )
+            or clean_word.casefold() in _FOLDED_ACRONYMS
             or clean_word in _KNOWN_PROPER_NOUNS
             or any(character.isdigit() for character in clean_word)
             or not clean_word.isupper()
@@ -238,6 +247,45 @@ def _normalize_choice(term: str) -> str:
     if normalized:
         normalized[0] = normalized[0][:1].upper() + normalized[0][1:]
     return " ".join(normalized)
+
+def _choice_without_note(choice: str) -> str:
+    """'Implementation (coding)' -> 'Implementation'. A trailing note in brackets makes
+    one option longer than the rest and often hints at the answer, so options drop it."""
+    stripped = re.sub(r"\s*\([^()]*\)\s*$", "", choice).strip()
+    return stripped or choice
+
+
+def _stem_heading(heading: str) -> str:
+    """Keep acronyms like "(SDLC)" but drop long notes like "(Stanford d.school)"."""
+    def keep(match: re.Match) -> str:
+        inner = match.group(1)
+        return match.group(0) if re.fullmatch(r"[A-Z][A-Za-z]{0,5}", inner) and inner.upper() == inner else ""
+    return re.sub(r"\s+", " ", re.sub(r"\s*\(([^()]*)\)", keep, heading)).strip()
+
+
+def _description_question(explanation: str, heading: str | None, seed: str) -> str:
+    """Question for a "Term — description" line, worded a few different ways.
+
+    With a list heading the question names the list, so the student knows what kind
+    of term is being asked for: Under "Testing levels", which term is described as …?
+    """
+    text = re.sub(r"\s+", " ", str(explanation)).strip().rstrip(".!?")
+    pick = int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:6], 16) % 3
+    if heading:
+        name = _stem_heading(heading)
+        forms = (
+            f'Under "{name}", which term is described as "{text}"?',
+            f'Which term under "{name}" matches this description: "{text}"?',
+            f'In "{name}", which term means "{text}"?',
+        )
+    else:
+        forms = (
+            f'Which term matches this description: "{text}"?',
+            f'Which term is described as "{text}"?',
+            f'What term does this describe: "{text}"?',
+        )
+    return forms[pick]
+
 
 def _is_concept_term(term: str) -> bool:
     normalized = re.sub(r"\s+", " ", term).strip().casefold()
