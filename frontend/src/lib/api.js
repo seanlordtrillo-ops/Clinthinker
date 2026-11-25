@@ -85,6 +85,18 @@ export const api = {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ generation_id: generationId, question_ids: questionIds })
   }),
+  submitAnswer: (questionId, answer, generationId = null) => apiRequest("/api/attempts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question_id: questionId, answer, generation_id: generationId })
+  }),
+  progress: () => apiRequest("/api/progress"),
+  dueReviews: ({ limit = 20, topic = null, mistakesOnly = false } = {}) => {
+    const params = new URLSearchParams({ limit: String(limit), mistakes_only: String(mistakesOnly) });
+    if (topic) params.set("topic", topic);
+    return apiRequest(`/api/review/due?${params}`);
+  },
+  clearProgress: () => apiRequest("/api/progress", { method: "DELETE" }),
   savedQuestions: (includeAnswers = false, sessionId = null) => apiRequest(
     `/api/questions/saved?include_answers=${includeAnswers}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""}`
   ),

@@ -68,6 +68,11 @@ export default function App() {
   });
   const [questionAnswers, setQuestionAnswers] = useState({});
   const [questionExplanations, setQuestionExplanations] = useState({});
+  const [selectedQuestionAnswers, setSelectedQuestionAnswers] = useState({});
+  const [questionAttemptResults, setQuestionAttemptResults] = useState({});
+  const [checkingQuestionId, setCheckingQuestionId] = useState(null);
+  const [studyProgress, setStudyProgress] = useState(null);
+  const [studyProgressBusy, setStudyProgressBusy] = useState(false);
 
   useEffect(() => {
     if (!printingSavedSessionId) return undefined;
@@ -95,6 +100,21 @@ export default function App() {
   const lessonFileInput = useRef(null);
   const csvInput = useRef(null);
   const knownQuestionUploadIds = useRef(new Set());
+  const answerStateVersion = useRef(0);
+
+  const refreshStudyProgress = async () => {
+    setStudyProgressBusy(true);
+    try {
+      const result = await api.progress();
+      setStudyProgress(result);
+      return result;
+    } catch (loadError) {
+      setError(`Study progress could not be loaded: ${loadError.message}`);
+      return null;
+    } finally {
+      setStudyProgressBusy(false);
+    }
+  };
 
   const syncSavedUploads = (savedUploads, excludedNewUploadIds = []) => {
     const availableIds = new Set(savedUploads.map((upload) => upload.id));
@@ -237,6 +257,24 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
+    if (page !== "My Progress") return;
+    let active = true;
+    setStudyProgressBusy(true);
+    setError("");
+    api.progress()
+      .then((result) => {
+        if (active) setStudyProgress(result);
+      })
+      .catch((loadError) => {
+        if (active) setError(`Study progress could not be loaded: ${loadError.message}`);
+      })
+      .finally(() => {
+        if (active) setStudyProgressBusy(false);
+      });
+    return () => { active = false; };
+  }, [page]);
+
+  useEffect(() => {
     document.documentElement.dataset.appearance = settings.appearance;
     document.title = "Clinthinker©";
     const themeColors = { orange: "#100d0a", pink: "#fff8fc", regal: "#171225", cmu: "#f6f9fc" };
@@ -301,6 +339,8 @@ export default function App() {
         setQuestionResult(null);
         setQuestionAnswers({});
         setQuestionExplanations({});
+        setQuestionAttemptResults({});
+        setSelectedQuestionAnswers({});
         setQuestionsSaved(false);
         if (remainingLessons.length) {
           await generateQuestions({ lessons: remainingLessons });
@@ -582,6 +622,54 @@ export default function App() {
     }
   };
 
+  const submitStudyAnswer = async (questionId, answer, generationId = null) => {
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.submitAnswer(questionId, answer, generationId);
+      await refreshStudyProgress();
+      return result;
+    } catch (answerError) {
+      if (answerError.status === 410) setQuestionSetUnavailable(true);
+      setError(answerError.message);
+      return null;
+    }
+  };
+
+  const checkGeneratedAnswer = async (item) => {
+    const answer = selectedQuestionAnswers[item.id];
+    if (answer === undefined || answer.trim() === "") return;
+    const version = answerStateVersion.current;
+    setCheckingQuestionId(item.id);
+    try {
+      const result = await submitStudyAnswer(item.id, answer, questionResult?.generation_id);
+      if (result && version === answerStateVersion.current) {
+        setQuestionAttemptResults((current) => ({ ...current, [item.id]: result }));
+      }
+    } finally {
+      if (version === answerStateVersion.current) setCheckingQuestionId(null);
+    }
+  };
+
+  const clearStudyProgress = async () => {
+    if (!window.confirm("Delete all your answers, mastery scores and review schedule? Your lessons, saved questions and training data are kept.")) return false;
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.clearProgress();
+      answerStateVersion.current += 1;
+      setQuestionAttemptResults({});
+      setSelectedQuestionAnswers({});
+      setCheckingQuestionId(null);
+      setNotice(`Deleted ${result.attempts_deleted} answer${result.attempts_deleted === 1 ? "" : "s"} and ${result.questions_deleted} tracked question${result.questions_deleted === 1 ? "" : "s"}.`);
+      await refreshStudyProgress();
+      return true;
+    } catch (clearError) {
+      setError(`Study progress could not be reset: ${clearError.message}`);
+      return false;
+    }
+  };
+
   const generateQuestions = async ({
     lessons: lessonOverride = lessonUploads,
     useStyle = useExamStyle
@@ -598,6 +686,7 @@ export default function App() {
       return null;
     }
     setQuestionBusy(true);
+    answerStateVersion.current += 1;
     setQuestionSetUnavailable(false);
     if (useLesson) {
       setLessonProgress({
@@ -607,6 +696,8 @@ export default function App() {
     }
     setQuestionAnswers({});
     setQuestionExplanations({});
+    setQuestionAttemptResults({});
+    setSelectedQuestionAnswers({});
     setQuestionsSaved(false);
     try {
       const result = await api.generateQuestions({
@@ -693,6 +784,8 @@ export default function App() {
     setQuestionResult(null);
     setQuestionAnswers({});
     setQuestionExplanations({});
+    setQuestionAttemptResults({});
+    setSelectedQuestionAnswers({});
     setQuestionsSaved(false);
     let nextLessons = [...lessonUploads, ...rejectedLessons];
     const uploadErrors = rejected.map((file) => `${file.name}: unsupported file type`);
@@ -780,6 +873,8 @@ export default function App() {
     setQuestionResult(null);
     setQuestionAnswers({});
     setQuestionExplanations({});
+    setQuestionAttemptResults({});
+    setSelectedQuestionAnswers({});
     setQuestionsSaved(false);
     if (remainingLessons.some((lesson) => lesson.status === "Ready")) {
       void generateQuestions({ lessons: remainingLessons });
@@ -1149,6 +1244,11 @@ export default function App() {
           preferences={questionPreferences}
           answers={questionAnswers}
           explanations={questionExplanations}
+          selectedAnswers={selectedQuestionAnswers}
+          submittedAnswers={questionAttemptResults}
+          checkingQuestionId={checkingQuestionId}
+          onSelectAnswer={(id, answer) => setSelectedQuestionAnswers((current) => ({ ...current, [id]: answer }))}
+          onSubmitAnswer={checkGeneratedAnswer}
           busy={questionBusy}
           saved={questionsSaved}
           onGenerate={generateQuestions}
@@ -1160,6 +1260,17 @@ export default function App() {
           onBack={() => setPage("Upload")}
           error={error}
           notice={notice}
+        />}
+        {page === "My Progress" && <MyProgressPage
+          data={studyProgress}
+          busy={studyProgressBusy}
+          error={error}
+          notice={notice}
+          onNavigate={setPage}
+          onAnswer={submitStudyAnswer}
+          onRefresh={refreshStudyProgress}
+          onClearProgress={clearStudyProgress}
+          onError={setError}
         />}
         {page === "Settings" && <SettingsPage
           settings={settings}
@@ -1173,6 +1284,8 @@ export default function App() {
             setQuestionResult(null);
             setQuestionAnswers({});
             setQuestionExplanations({});
+            setQuestionAttemptResults({});
+            setSelectedQuestionAnswers({});
           }}
           selectedUploadIds={questionUploadIds}
           setSelectedUploadIds={(update) => {
@@ -1180,6 +1293,8 @@ export default function App() {
             setQuestionResult(null);
             setQuestionAnswers({});
             setQuestionExplanations({});
+            setQuestionAttemptResults({});
+            setSelectedQuestionAnswers({});
           }}
           topics={questionTopics}
           questionForm={questionForm}
@@ -1188,6 +1303,8 @@ export default function App() {
             setQuestionResult(null);
             setQuestionAnswers({});
             setQuestionExplanations({});
+            setQuestionAttemptResults({});
+            setSelectedQuestionAnswers({});
           }}
           saveSettings={saveSettings}
           busy={settingsBusy}
@@ -1239,7 +1356,8 @@ function PracticeQuestionsPage({
   datasets, uploads, selectedDatasetId, selectedUploadIds, lessonUploads,
   lessonUploadBusy, lessonProgress, useExamStyle, onChangeExamStyle, lessonUploadInput,
   onUploadLessons, onRemoveLesson, form, onOpenSettings,
-  result, preferences, answers, explanations, busy, saved, questionSetUnavailable, onGenerate, onSave, onRevealAnswers,
+  result, preferences, answers, explanations, selectedAnswers, submittedAnswers,
+  checkingQuestionId, onSelectAnswer, onSubmitAnswer, busy, saved, questionSetUnavailable, onGenerate, onSave, onRevealAnswers,
   onBack, error, notice, onRateQuestion, onResetPreferences, onResetQuestionHistory
 }) {
   const [lessonDropActive, setLessonDropActive] = useState(false);
@@ -1487,8 +1605,19 @@ function PracticeQuestionsPage({
                   <span>{String.fromCharCode(65 + choiceIndex)}.</span>{choice}
                 </li>)}
               </ol>}
-              {item.question_type === "True or False" && <div className="exam-response-line">True / False: ____________________</div>}
-              {item.question_type === "Identification" && <div className="exam-response-line" />}
+              {item.question_type === "True or False" && <div className="exam-response-line exam-print-response">True / False: ____________________</div>}
+              {item.question_type === "Identification" && <div className="exam-response-line exam-print-response" />}
+              <div className="practice-answer-entry">
+                <AnswerControls
+                  item={item}
+                  answer={selectedAnswers[item.id] || ""}
+                  disabled={Boolean(submittedAnswers[item.id]) || checkingQuestionId === item.id || questionSetUnavailable}
+                  onChange={(answer) => onSelectAnswer(item.id, answer)}
+                  onSubmit={() => onSubmitAnswer(item)}
+                  submitting={checkingQuestionId === item.id}
+                />
+                {submittedAnswers[item.id] && <AnswerResult result={submittedAnswers[item.id]} />}
+              </div>
               <details className="question-instructor-details no-print">
                 <summary>Question details and feedback</summary>
                 <div className="practice-question-meta">
@@ -1531,6 +1660,298 @@ function PracticeQuestionsPage({
       <p className="output-disclaimer">{result.disclaimer}</p>
     </div>}
   </section>;
+}
+
+function AnswerControls({ item, answer, disabled, onChange, onSubmit, submitting = false }) {
+  const hasAnswer = typeof answer === "string" && answer.trim().length > 0;
+  return <div className="answer-controls">
+    {item.question_type === "Multiple Choice" && <div className="answer-choice-list">
+      {(item.choices || []).map((choice, index) => (
+        <button
+          className={`answer-choice ${answer === choice ? "answer-choice-selected" : ""}`}
+          type="button"
+          key={`${item.id}-${index}`}
+          aria-pressed={answer === choice}
+          disabled={disabled}
+          onClick={() => onChange(choice)}
+        >
+          <span>{String.fromCharCode(65 + index)}.</span>{choice}
+        </button>
+      ))}
+    </div>}
+    {item.question_type === "True or False" && <div className="answer-binary-choice">
+      {["True", "False"].map((choice) => (
+        <button
+          className={`button-outline ${answer === choice ? "answer-choice-selected" : ""}`}
+          type="button"
+          key={choice}
+          aria-pressed={answer === choice}
+          disabled={disabled}
+          onClick={() => onChange(choice)}
+        >{choice}</button>
+      ))}
+    </div>}
+    {item.question_type === "Identification" && <label className="answer-identification">
+      <span>Your answer</span>
+      <input
+        type="text"
+        value={answer}
+        maxLength={240}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>}
+    <button className="button-dark answer-check-button" type="button" disabled={!hasAnswer || disabled} onClick={onSubmit}>
+      {submitting ? <><span className="spinner" /> Checking...</> : "Check"}
+    </button>
+  </div>;
+}
+
+function AnswerResult({ result }) {
+  const intervals = { 1: 0, 2: 1, 3: 3, 4: 7, 5: 14 };
+  const days = intervals[result.review_box];
+  const nextReview = days === 0
+    ? "today"
+    : days
+      ? `in ${days} day${days === 1 ? "" : "s"}`
+      : result.next_review_at
+        ? formatDate(result.next_review_at)
+        : "scheduled";
+  return <div className={`answer-result ${result.correct ? "answer-result-correct" : "answer-result-incorrect"}`} role="status">
+    <strong>{result.correct ? "✓ Correct" : "✗ Incorrect"}</strong>
+    <span><b>Correct answer:</b> {result.correct_answer}</span>
+    {result.explanation && <span><b>Explanation:</b> {result.explanation}</span>}
+    <small>Next review: {nextReview}</small>
+  </div>;
+}
+
+function MyProgressPage({
+  data, busy, error, notice, onNavigate, onAnswer, onRefresh, onClearProgress, onError
+}) {
+  const [mistakesOnly, setMistakesOnly] = useState(false);
+  const [reviewQuestions, setReviewQuestions] = useState([]);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewAnswer, setReviewAnswer] = useState("");
+  const [reviewResult, setReviewResult] = useState(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewComplete, setReviewComplete] = useState(false);
+  const [reviewTopic, setReviewTopic] = useState(null);
+  const reviewSessionVersion = useRef(0);
+  const total = data?.totals || {};
+  const currentReview = reviewQuestions[reviewIndex];
+
+  const resetReviewSession = () => {
+    reviewSessionVersion.current += 1;
+    setReviewQuestions([]);
+    setReviewIndex(0);
+    setReviewAnswer("");
+    setReviewResult(null);
+    setReviewBusy(false);
+    setReviewComplete(false);
+    setReviewTopic(null);
+  };
+
+  const startReview = async (topic = null) => {
+    reviewSessionVersion.current += 1;
+    const version = reviewSessionVersion.current;
+    setReviewBusy(true);
+    setReviewQuestions([]);
+    setReviewResult(null);
+    setReviewAnswer("");
+    setReviewIndex(0);
+    setReviewComplete(false);
+    setReviewTopic(topic);
+    onError("");
+    try {
+      const result = await api.dueReviews({ limit: 20, topic, mistakesOnly });
+      if (version === reviewSessionVersion.current) setReviewQuestions(result.questions || []);
+    } catch (loadError) {
+      if (version === reviewSessionVersion.current) {
+        onError(`Due reviews could not be loaded: ${loadError.message}`);
+      }
+    } finally {
+      if (version === reviewSessionVersion.current) setReviewBusy(false);
+    }
+  };
+
+  const submitReviewAnswer = async () => {
+    if (!currentReview || !reviewAnswer.trim()) return;
+    const version = reviewSessionVersion.current;
+    setReviewBusy(true);
+    const result = await onAnswer(currentReview.question_id, reviewAnswer);
+    if (version === reviewSessionVersion.current) {
+      if (result) setReviewResult(result);
+      setReviewBusy(false);
+    }
+  };
+
+  const resetProgress = async () => {
+    if (await onClearProgress()) resetReviewSession();
+  };
+
+  const nextReviewQuestion = async () => {
+    if (reviewIndex + 1 >= reviewQuestions.length) {
+      setReviewComplete(true);
+      setReviewQuestions([]);
+      setReviewResult(null);
+      setReviewAnswer("");
+      await onRefresh();
+      return;
+    }
+    setReviewIndex((index) => index + 1);
+    setReviewResult(null);
+    setReviewAnswer("");
+  };
+
+  const topics = data?.topics || [];
+  return <section className="progress-page">
+    <div className="training-page-heading">
+      <div>
+        <div className="eyebrow"><span className="eyebrow-dot" /> STUDY HISTORY</div>
+        <h1>My Progress</h1>
+        <p>Track answers, build mastery, and revisit questions on a spaced schedule.</p>
+      </div>
+    </div>
+    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
+    {busy && !data && <div className="training-empty">Loading your progress...</div>}
+    {!busy && data && topics.length === 0 ? <div className="progress-empty">
+      <p>Answer a few practice questions and your progress will appear here.</p>
+      <button className="button-dark" type="button" onClick={() => onNavigate("Generate Practice Questions")}>
+        <Sparkles size={15} /> Generate Practice Questions
+      </button>
+    </div> : data && <>
+      <div className="progress-summary">
+        <SummaryMetric label="Total answers" value={total.attempts ?? 0} />
+        <SummaryMetric label="Accuracy" value={total.accuracy == null ? "—" : `${Math.round(total.accuracy * 100)}%`} />
+        <SummaryMetric label="Topics practiced" value={total.topics_practiced ?? 0} />
+        <SummaryMetric label="Questions due now" value={total.due_now ?? 0} />
+      </div>
+
+      <section className="progress-section">
+        <div className="section-heading"><div><h2>Study next</h2><p>Topics prioritized by exam likelihood and mastery.</p></div></div>
+        {data.recommendations?.length
+          ? <div className="progress-recommendations">{data.recommendations.map((topic) => (
+            <article className="progress-card" key={topic.topic}>
+              <div className="progress-card-heading">
+                <h3>{topic.topic}</h3>
+                <span className={`likelihood-chip likelihood-${(topic.likelihood || "Unknown").toLowerCase()}`}>
+                  {topic.likelihood || "Unknown"}
+                </span>
+              </div>
+              {topic.attempts === 0
+                ? <span className="progress-not-practiced">Not practiced yet</span>
+                : <div className="progress-mastery">
+                  <MasteryBar mastery={topic.mastery} />
+                  <strong>{topic.mastery == null ? "—" : `${Math.round(topic.mastery * 100)}%`}</strong>
+                </div>}
+              <p>{topic.reason}</p>
+              <button
+                className="button-outline"
+                type="button"
+                onClick={() => topic.due_reviews > 0
+                  ? startReview(topic.topic)
+                  : onNavigate("Generate Practice Questions")}
+              >{topic.due_reviews > 0 ? `Review ${topic.due_reviews} questions` : "Practice this topic"}</button>
+            </article>
+          ))}</div>
+          : <p className="progress-muted">No recommendations yet.</p>}
+      </section>
+
+      <section className="progress-section">
+        <div className="section-heading"><div><h2>Topic progress</h2><p>Sorted by study priority.</p></div></div>
+        <div className="progress-table-wrap"><table className="progress-table">
+          <thead><tr>
+            <th>Topic</th><th>Exam likelihood</th><th>Mastery</th><th>Correct / answers</th><th>Due</th><th>Priority</th>
+          </tr></thead>
+          <tbody>{topics.map((topic) => (
+            <tr key={topic.topic}>
+              <td>{topic.topic}</td>
+              <td><span className={`likelihood-chip likelihood-${(topic.likelihood || "Unknown").toLowerCase()}`}>{topic.likelihood || "Unknown"}</span></td>
+              <td><div className="progress-table-mastery">
+                {topic.attempts === 0
+                  ? <small>Not practiced yet</small>
+                  : <>
+                    <MasteryBar mastery={topic.mastery} />
+                    <strong>{topic.mastery == null ? "—" : `${Math.round(topic.mastery * 100)}%`}</strong>
+                    {!topic.mastery_measured && <small>Not enough answers yet</small>}
+                  </>}
+              </div></td>
+              <td>{topic.correct} / {topic.attempts}</td>
+              <td>{topic.due_reviews}</td>
+              <td>{topic.priority == null ? "—" : `${Math.round(topic.priority * 100)}%`}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      </section>
+
+      <section className="progress-section progress-review-section">
+        <div className="section-heading">
+          <div><h2>Due for review: {total.due_now ?? 0}</h2><p>Strengthen recall with spaced practice.</p></div>
+          <button className="button-dark" type="button" disabled={reviewBusy || !total.due_now} onClick={() => startReview()}>
+            {reviewBusy && !currentReview ? "Loading..." : "Review now"}
+          </button>
+        </div>
+        <label className="progress-mistakes-toggle">
+          <input type="checkbox" checked={mistakesOnly} onChange={(event) => setMistakesOnly(event.target.checked)} />
+          <span>Mistakes only</span>
+        </label>
+        {reviewTopic && <p className="progress-review-filter">Reviewing {reviewTopic}</p>}
+        {reviewComplete && <div className="progress-review-complete" role="status">Review complete</div>}
+        {reviewBusy && currentReview && <p className="progress-muted">Saving your answer...</p>}
+        {currentReview && !reviewComplete && <article className="progress-review-card">
+          <div className="practice-question-meta">
+            <span>{currentReview.topic}</span><span>{currentReview.difficulty}</span><span>BOX {currentReview.box}</span>
+          </div>
+          <h3>{currentReview.question_text}</h3>
+          {currentReview.source_material_name && <small className="progress-review-source">Source: {currentReview.source_material_name}</small>}
+          {!reviewResult ? <AnswerControls
+            item={currentReview}
+            answer={reviewAnswer}
+            disabled={reviewBusy}
+            onChange={setReviewAnswer}
+            onSubmit={submitReviewAnswer}
+            submitting={reviewBusy}
+          /> : <>
+            <AnswerResult result={reviewResult} />
+            <button className="button-dark progress-next-button" type="button" onClick={nextReviewQuestion}>Next</button>
+          </>}
+        </article>}
+        {!reviewBusy && !currentReview && !reviewComplete && reviewQuestions.length === 0 && (
+          <p className="progress-muted">{total.due_now === 0
+            ? "Nothing to review right now. Answer practice questions and the ones you miss will come back here."
+            : reviewTopic
+              ? "No questions are due for this topic."
+              : "Select Review now to load due questions."}</p>
+        )}
+      </section>
+
+      <details className="progress-method">
+        <summary>How is this calculated?</summary>
+        <p><strong>Mastery:</strong> {data.method?.mastery}</p>
+        <p><strong>Priority:</strong> {data.method?.priority}</p>
+        <div><strong>Review intervals:</strong>
+          <ul>{Object.entries(data.method?.review_intervals_days || {}).map(([box, days]) => (
+            <li key={box}>Box {box}: {days === 0 ? "today" : `in ${days} days`}</li>
+          ))}</ul>
+        </div>
+      </details>
+      <div className="progress-reset-row">
+        <button className="button-outline progress-reset-button" type="button" onClick={resetProgress}>Reset answer history</button>
+      </div>
+    </>}
+  </section>;
+}
+
+function SummaryMetric({ label, value }) {
+  return <div className="progress-summary-card"><span>{label}</span><strong>{value}</strong></div>;
+}
+
+function MasteryBar({ mastery }) {
+  const percent = mastery == null ? 0 : Math.max(0, Math.min(100, mastery * 100));
+  return <span className="mastery-bar" aria-label={`${Math.round(percent)}% mastery`}>
+    <i style={{ width: `${percent}%` }} />
+  </span>;
 }
 
 function SavedQuestionsPage({

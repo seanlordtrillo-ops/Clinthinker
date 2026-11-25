@@ -180,5 +180,7 @@ def delete_upload(upload_id: str) -> dict:
             raise HTTPException(
                 status_code=500, detail=f"Could not delete upload: {error}"
             ) from error
+        # Review copies of this file's questions go too; answer history (topic stats) stays.
+        db.execute("DELETE FROM practice_items WHERE source_material_id=?", (upload_id,))
         db.execute("DELETE FROM uploads WHERE id=?", (upload_id,))
     return {"deleted": upload_id}

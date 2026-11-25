@@ -1,4 +1,4 @@
-import { CircleHelp, Database, FileQuestion, FileUp, NotebookText, Settings2, ShieldCheck } from "lucide-react";
+import { CircleHelp, Database, FileQuestion, FileUp, NotebookText, Settings2, ShieldCheck, TrendingUp } from "lucide-react";
 import cmuLogoFull from "../assets/cmu-logo-full.png";
 import cmuLogoFullBlueText from "../assets/cmu-logo-full-blue-text (1).png";
 import cmuShield from "../assets/cmu-shield (2).png";
@@ -6,6 +6,7 @@ import cmuShield from "../assets/cmu-shield (2).png";
 const items = [
   ["Upload", FileUp],
   ["Generate Practice Questions", FileQuestion],
+  ["My Progress", TrendingUp],
   ["Saved Questions", NotebookText],
   ["Training Data", Database],
   ["Settings", Settings2],

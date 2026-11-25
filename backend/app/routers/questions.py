@@ -47,8 +47,17 @@ import importlib
 def _compat_main():
     return importlib.import_module("app.main")
 from ..services.uploads import _is_exam_upload
+from app.progress import record_topic_likelihood
 
 router = APIRouter()
+
+
+def _remember_topic_likelihood(lesson_ids: list[str], likely_topics: list[dict]) -> None:
+    """Keep each lesson's topic likelihood for My Progress. Never blocks generation."""
+    try:
+        record_topic_likelihood(lesson_ids, likely_topics)
+    except Exception:
+        logging.getLogger(__name__).warning("Could not save topic likelihood", exc_info=True)
 
 
 _question_batches: OrderedDict[str, dict] = OrderedDict()
@@ -379,6 +388,7 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
                 decision_policy=decision_policy,
             )
             result.update(lesson_ranking)
+            _remember_topic_likelihood(lesson_ids, lesson_ranking.get("likely_topics", []))
             result["skipped_exam_files"] = skipped_exam_files
             result["classifier_training"] = {
                 "mode": "on-demand during generation; fitted models are cached in memory",

@@ -86,6 +86,7 @@ from .routers.datasets import router as datasets_router
 from .routers.predictions import router as predictions_router
 from .routers.questions import router as questions_router
 from .routers.settings import router as settings_router
+from .routers.progress import router as progress_router
 
 app.router.routes.extend(system_router.routes)
 app.router.routes.extend(updates_router.routes)
@@ -94,6 +95,7 @@ app.router.routes.extend(datasets_router.routes)
 app.router.routes.extend(predictions_router.routes)
 app.router.routes.extend(questions_router.routes)
 app.router.routes.extend(settings_router.routes)
+app.router.routes.extend(progress_router.routes)
 
 if WEB_DIR.exists():
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="frontend")
@@ -140,6 +142,10 @@ from .routers.questions import rename_saved_session as rename_saved_session
 from .routers.questions import delete_saved_session as delete_saved_session
 from .routers.settings import read_settings as read_settings
 from .routers.settings import update_settings as update_settings
+from .routers.progress import submit_answer as submit_answer
+from .routers.progress import read_progress as read_progress
+from .routers.progress import clear_progress as clear_progress
+from .routers.progress import read_due_reviews as read_due_reviews
 from .routers.questions import _question_batches as _question_batches
 from .routers.questions import _MAX_QUESTION_BATCHES as _MAX_QUESTION_BATCHES
 from .routers.questions import _QUESTION_BATCH_UNAVAILABLE_DETAIL as _QUESTION_BATCH_UNAVAILABLE_DETAIL

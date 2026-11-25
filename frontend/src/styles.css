@@ -492,6 +492,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .exam-question { margin: 0 0 14px; padding: 0 0 9px; border: 0; break-inside: avoid; }
   .exam-question-stem { margin: 0 0 6px; color: #171717; font-size: 10pt; line-height: 1.5; }
   .exam-choices { gap: 2px; margin-left: 23px; }
+  .exam-choices, .exam-print-choices { display: grid; }
+  .exam-print-response { display: block; }
+  .practice-answer-entry { display: none; }
   .exam-choices li { color: #222; font-size: 9.5pt; line-height: 1.45; }
   .exam-response-line { color: #222; font-size: 9.5pt; }
   .exam-response-line:empty { border-color: #777; }
@@ -550,6 +553,78 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .prediction-topic i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--orange), var(--orange-bright)); box-shadow: 0 0 9px rgba(var(--accent-rgb), .4); }
 .prediction-confidence { width: 38px; color: var(--text-soft); font-size: 9px; text-align: right; }
 .output-disclaimer { margin: 0 -16px; padding: 10px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8px; line-height: 1.5; }
+
+.progress-page { flex: 1; width: 100%; max-width: 1010px; align-self: center; overflow-y: auto; padding: 30px 32px 35px; }
+.progress-page .training-page-heading { margin-bottom: 18px; }
+.progress-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.progress-summary-card { display: grid; gap: 7px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.progress-summary-card span { color: var(--muted); font-size: 9px; }
+.progress-summary-card strong { color: var(--text); font-size: 20px; font-weight: 680; }
+.progress-section { margin-top: 18px; }
+.progress-section > .section-heading { align-items: flex-start; }
+.progress-recommendations { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.progress-card, .progress-review-card { min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.progress-card { display: flex; flex-direction: column; gap: 10px; }
+.progress-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.progress-card-heading h3 { margin: 0; overflow-wrap: anywhere; font-size: 12px; }
+.progress-card .likelihood-chip { flex: 0 0 auto; }
+.progress-mastery { display: flex; align-items: center; gap: 8px; }
+.progress-mastery > strong, .progress-table-mastery > strong { color: var(--text-soft); font-size: 9px; font-weight: 650; white-space: nowrap; }
+.mastery-bar { display: block; width: 100%; height: 6px; overflow: hidden; border-radius: 5px; background: rgba(var(--accent-rgb), .12); }
+.mastery-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--orange), var(--orange-bright)); }
+.progress-card p { flex: 1; margin: 0; color: var(--muted); font-size: 9px; line-height: 1.55; }
+.progress-not-practiced { color: var(--muted); font-size: 9px; }
+.progress-card .button-outline { align-self: flex-start; min-height: 33px; }
+.progress-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+.progress-table { width: 100%; min-width: 730px; border-collapse: collapse; font-size: 9px; }
+.progress-table th, .progress-table td { padding: 10px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.progress-table th { color: var(--muted); font-weight: 650; white-space: nowrap; }
+.progress-table td { color: var(--text-soft); }
+.progress-table tr:last-child td { border-bottom: 0; }
+.progress-table .likelihood-chip { display: inline-flex; }
+.progress-table-mastery { display: grid; grid-template-columns: minmax(65px, 85px) auto; align-items: center; gap: 5px 7px; }
+.progress-table-mastery small { grid-column: 1 / -1; color: var(--muted); font-size: 8px; }
+.progress-review-section > .section-heading { align-items: center; }
+.progress-review-section > .section-heading .button-dark { flex: 0 0 auto; min-height: 34px; }
+.progress-mistakes-toggle { display: inline-flex; align-items: center; gap: 7px; margin: 0 0 10px; color: var(--text-soft); font-size: 9px; cursor: pointer; }
+.progress-mistakes-toggle input { margin: 0; accent-color: var(--orange); }
+.progress-review-filter, .progress-muted { margin: 7px 0; color: var(--muted); font-size: 9px; }
+.progress-review-card { display: grid; gap: 10px; }
+.progress-review-card h3 { margin: 0; font-size: 12px; font-weight: 580; line-height: 1.6; white-space: pre-wrap; }
+.progress-review-source { color: var(--muted); font-size: 8px; }
+.progress-review-complete { padding: 12px; border: 1px solid rgba(var(--accent-rgb), .22); border-radius: 8px; color: var(--orange-bright); background: rgba(var(--accent-rgb), .05); font-size: 10px; font-weight: 650; }
+.progress-next-button { justify-self: start; min-height: 34px; }
+.progress-method { margin-top: 17px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; color: var(--text-soft); background: var(--panel); font-size: 9px; }
+.progress-method summary { color: var(--text); font-weight: 650; cursor: pointer; }
+.progress-method p { margin: 9px 0; color: var(--muted); line-height: 1.55; }
+.progress-method p strong, .progress-method > div > strong { color: var(--text-soft); }
+.progress-method ul { display: flex; flex-wrap: wrap; gap: 7px 15px; margin: 7px 0 0; padding-left: 17px; color: var(--muted); }
+.progress-reset-row { display: flex; justify-content: flex-end; margin-top: 15px; }
+.progress-reset-button { color: var(--red); }
+.progress-empty { display: grid; justify-items: center; gap: 12px; padding: 38px 15px; border: 1px dashed var(--line-strong); border-radius: 11px; color: var(--text-soft); text-align: center; background: rgba(var(--accent-rgb), .025); }
+.progress-empty p { margin: 0; font-size: 11px; }
+.progress-empty .button-dark { min-height: 35px; }
+.progress-page .training-empty { padding: 18px 0; }
+.answer-controls { display: grid; justify-items: start; gap: 8px; }
+.answer-choice-list { display: grid; width: 100%; gap: 5px; }
+.answer-choice { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--text-soft); background: rgba(var(--accent-rgb), .025); text-align: left; font-size: 10px; line-height: 1.5; cursor: pointer; }
+.answer-choice > span { flex: 0 0 18px; color: var(--orange-bright); font-weight: 700; }
+.answer-choice:hover:not(:disabled), .answer-choice-selected { border-color: rgba(var(--accent-rgb), .55); color: var(--text); background: rgba(var(--accent-rgb), .1); }
+.answer-choice:disabled { opacity: .7; cursor: not-allowed; }
+.answer-binary-choice { display: flex; gap: 7px; }
+.answer-binary-choice .button-outline { min-width: 76px; }
+.answer-identification { display: grid; width: min(100%, 430px); gap: 5px; color: var(--muted); font-size: 9px; }
+.answer-identification input { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 7px; color: var(--text); background: var(--panel); font-size: 10px; }
+.answer-check-button { min-height: 32px; }
+.answer-result { display: grid; gap: 6px; width: 100%; padding: 10px; border: 1px solid rgba(var(--accent-rgb), .25); border-radius: 7px; color: var(--text-soft); background: rgba(var(--accent-rgb), .05); font-size: 9px; line-height: 1.5; overflow-wrap: anywhere; }
+.answer-result > strong { color: var(--orange-bright); font-size: 10px; }
+.answer-result-incorrect { border-color: rgba(255, 118, 98, .32); }
+.answer-result-incorrect > strong { color: var(--red); }
+.answer-result > small { color: var(--muted); font-size: 8px; }
+.practice-answer-entry { display: grid; gap: 9px; margin: 9px 0; }
+.exam-print-response { display: none; }
+.exam-choices { display: none; }
+.exam-print-choices { display: none; }
 
 .simple-page { flex: 1; width: min(100%, 760px); align-self: center; overflow-y: auto; padding: 36px 34px; }
 .simple-page > p { margin: 0 0 21px; }
@@ -619,6 +694,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .upload-page { padding: 22px 16px 28px; }
   .training-page { padding: 22px 16px 28px; }
   .question-page { padding: 22px 16px 28px; }
+  .progress-page { padding: 22px 16px 28px; }
   .upload-page-heading { align-items: flex-start; flex-direction: column; gap: 11px; margin-bottom: 17px; }
   .upload-page h1, .simple-page h1 { font-size: 24px; }
   .upload-layout { grid-template-columns: 1fr; }
@@ -627,6 +703,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .model-evaluation-panel .section-heading { flex-direction: column; }
   .question-controls-grid, .question-upload-list { grid-template-columns: 1fr; }
   .question-page .training-page-heading { flex-direction: column; }
+  .progress-page .training-page-heading { flex-direction: column; align-items: flex-start; }
+  .progress-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .progress-recommendations { grid-template-columns: 1fr; }
+  .progress-review-section > .section-heading { align-items: flex-start; flex-direction: column; }
   .question-feedback-notice { align-items: flex-start; flex-wrap: wrap; }
   .question-feedback-notice .button-outline { margin-left: 25px; }
   .question-feedback-actions { flex-wrap: wrap; }
@@ -649,6 +729,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .upload-page { padding: 20px 12px 25px; }
   .training-page { padding: 20px 12px 25px; }
   .question-page { padding: 20px 12px 25px; }
+  .progress-page { padding: 20px 12px 25px; }
   .upload-page h1 { font-size: 22px; }
   .upload-page-heading p { font-size: 10px; }
   .upload-controls, .saved-materials { padding: 11px; }
@@ -659,4 +740,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .simple-settings-card label { align-items: flex-start; flex-direction: column; }
   .simple-settings-card select { width: 100%; }
   .prediction-row { gap: 6px; }
+}
+
+@media print {
+  .exam-choices { display: grid; }
+  .exam-print-response { display: block; }
 }

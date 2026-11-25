@@ -168,6 +168,54 @@ def initialize() -> None:
                 answer_length TEXT NOT NULL DEFAULT 'single-term',
                 rated_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+            -- Study progress: a copy of every question the user has answered, so it
+            -- can come back for review even if the practice set was never saved.
+            CREATE TABLE IF NOT EXISTS practice_items (
+                question_id TEXT PRIMARY KEY,
+                question_text TEXT NOT NULL,
+                question_type TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                difficulty TEXT NOT NULL,
+                choices TEXT NOT NULL,
+                correct_answer TEXT NOT NULL,
+                explanation TEXT NOT NULL DEFAULT '',
+                source_material_id TEXT,
+                source_material_name TEXT NOT NULL DEFAULT '',
+                likelihood_score REAL,
+                first_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            -- One row per answer the user submits (practice now, classroom later).
+            CREATE TABLE IF NOT EXISTS attempts (
+                id TEXT PRIMARY KEY,
+                question_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                source_material_id TEXT,
+                chosen_answer TEXT NOT NULL,
+                correct INTEGER NOT NULL CHECK(correct IN (0, 1)),
+                source TEXT NOT NULL DEFAULT 'practice',
+                student_name TEXT,
+                answered_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS attempts_topic_time
+                ON attempts(topic, answered_at);
+            -- Leitner boxes for spaced repetition (box 1 = review now, box 5 = mastered).
+            CREATE TABLE IF NOT EXISTS review_schedule (
+                question_id TEXT PRIMARY KEY
+                    REFERENCES practice_items(question_id) ON DELETE CASCADE,
+                box INTEGER NOT NULL CHECK(box BETWEEN 1 AND 5),
+                due_at TEXT NOT NULL,
+                last_correct INTEGER NOT NULL CHECK(last_correct IN (0, 1)),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            -- Latest exam-likelihood score of each topic in each lesson.
+            CREATE TABLE IF NOT EXISTS topic_likelihood (
+                upload_id TEXT NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
+                topic TEXT NOT NULL,
+                likelihood_score REAL NOT NULL,
+                likelihood TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY(upload_id, topic)
+            );
             """
         )
         upload_columns = {

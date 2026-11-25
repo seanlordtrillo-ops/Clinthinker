@@ -104,3 +104,9 @@ class QuestionFeedbackRequest(BaseModel):
 
 class RenameSavedSessionRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
+
+
+class SubmitAnswerRequest(BaseModel):
+    question_id: str = Field(min_length=1, max_length=120)
+    answer: str = Field(min_length=1, max_length=500)
+    generation_id: str | None = Field(default=None, min_length=1, max_length=100)

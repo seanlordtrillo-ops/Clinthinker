@@ -61,6 +61,84 @@
     "foreign_keys": [],
     "sql": "CREATE TABLE analyses (\n                id TEXT PRIMARY KEY,\n                source_label TEXT NOT NULL DEFAULT 'Uploaded materials',\n                predictions TEXT NOT NULL,\n                method TEXT NOT NULL DEFAULT 'TF-IDF + SVM + Naive Bayes ensemble',\n                training_dataset_id TEXT NOT NULL DEFAULT 'builtin',\n                training_dataset_name TEXT NOT NULL DEFAULT 'Built-in examples',\n                created_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
   },
+  "attempts": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "question_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "topic",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "source_material_id",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "chosen_answer",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "correct",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 6,
+        "dflt_value": "'practice'",
+        "name": "source",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt_value": null,
+        "name": "student_name",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt_value": "datetime('now')",
+        "name": "answered_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE attempts (\n                id TEXT PRIMARY KEY,\n                question_id TEXT NOT NULL,\n                topic TEXT NOT NULL,\n                source_material_id TEXT,\n                chosen_answer TEXT NOT NULL,\n                correct INTEGER NOT NULL CHECK(correct IN (0, 1)),\n                source TEXT NOT NULL DEFAULT 'practice',\n                student_name TEXT,\n                answered_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  },
   "generated_questions": {
     "columns": [
       {
@@ -305,6 +383,108 @@
     "foreign_keys": [],
     "sql": "CREATE TABLE model_calibration (\n                dataset_id TEXT PRIMARY KEY,\n                dataset_hash TEXT NOT NULL,\n                svm_temperature REAL NOT NULL,\n                ensemble_temperature REAL NOT NULL,\n                confidence_threshold REAL NOT NULL,\n                min_margin REAL NOT NULL,\n                disagreement_abstain INTEGER NOT NULL,\n                target_precision REAL NOT NULL,\n                low_reliability INTEGER NOT NULL,\n                sklearn_version TEXT NOT NULL,\n                created_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
   },
+  "practice_items": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "question_id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "question_text",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "question_type",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "topic",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "difficulty",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "choices",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt_value": null,
+        "name": "correct_answer",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt_value": "''",
+        "name": "explanation",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 8,
+        "dflt_value": null,
+        "name": "source_material_id",
+        "notnull": 0,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 9,
+        "dflt_value": "''",
+        "name": "source_material_name",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 10,
+        "dflt_value": null,
+        "name": "likelihood_score",
+        "notnull": 0,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 11,
+        "dflt_value": "datetime('now')",
+        "name": "first_seen_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE practice_items (\n                question_id TEXT PRIMARY KEY,\n                question_text TEXT NOT NULL,\n                question_type TEXT NOT NULL,\n                topic TEXT NOT NULL,\n                difficulty TEXT NOT NULL,\n                choices TEXT NOT NULL,\n                correct_answer TEXT NOT NULL,\n                explanation TEXT NOT NULL DEFAULT '',\n                source_material_id TEXT,\n                source_material_name TEXT NOT NULL DEFAULT '',\n                likelihood_score REAL,\n                first_seen_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  },
   "question_feedback": {
     "columns": [
       {
@@ -374,6 +554,63 @@
     ],
     "foreign_keys": [],
     "sql": "CREATE TABLE question_feedback (\n                question_id TEXT PRIMARY KEY,\n                rating INTEGER NOT NULL CHECK(rating IN (-1, 1)),\n                question_type TEXT NOT NULL,\n                difficulty TEXT NOT NULL,\n                wording_pattern TEXT NOT NULL,\n                question_length TEXT NOT NULL DEFAULT 'medium',\n                answer_length TEXT NOT NULL DEFAULT 'single-term',\n                rated_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
+  },
+  "review_schedule": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "question_id",
+        "notnull": 0,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "box",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "due_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "last_correct",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 4,
+        "dflt_value": "datetime('now')",
+        "name": "updated_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [
+      {
+        "from": "question_id",
+        "id": 0,
+        "match": "NONE",
+        "on_delete": "CASCADE",
+        "on_update": "NO ACTION",
+        "seq": 0,
+        "table": "practice_items",
+        "to": "question_id"
+      }
+    ],
+    "sql": "CREATE TABLE review_schedule (\n                question_id TEXT PRIMARY KEY\n                    REFERENCES practice_items(question_id) ON DELETE CASCADE,\n                box INTEGER NOT NULL CHECK(box BETWEEN 1 AND 5),\n                due_at TEXT NOT NULL,\n                last_correct INTEGER NOT NULL CHECK(last_correct IN (0, 1)),\n                updated_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
   },
   "saved_sessions": {
     "columns": [
@@ -466,6 +703,63 @@
     ],
     "foreign_keys": [],
     "sql": "CREATE TABLE settings (\n                id INTEGER PRIMARY KEY CHECK(id = 1),\n                value TEXT NOT NULL\n            )"
+  },
+  "topic_likelihood": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "upload_id",
+        "notnull": 1,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "topic",
+        "notnull": 1,
+        "pk": 2,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "likelihood_score",
+        "notnull": 1,
+        "pk": 0,
+        "type": "REAL"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "likelihood",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": "datetime('now')",
+        "name": "updated_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [
+      {
+        "from": "upload_id",
+        "id": 0,
+        "match": "NONE",
+        "on_delete": "CASCADE",
+        "on_update": "NO ACTION",
+        "seq": 0,
+        "table": "uploads",
+        "to": "id"
+      }
+    ],
+    "sql": "CREATE TABLE topic_likelihood (\n                upload_id TEXT NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,\n                topic TEXT NOT NULL,\n                likelihood_score REAL NOT NULL,\n                likelihood TEXT NOT NULL,\n                updated_at TEXT NOT NULL DEFAULT (datetime('now')),\n                PRIMARY KEY(upload_id, topic)\n            )"
   },
   "training_datasets": {
     "columns": [
