@@ -22,3 +22,6 @@ testing/
 
 *.patch
 *.pdf
+
+*.patch
+copilot-prompt-*.md
