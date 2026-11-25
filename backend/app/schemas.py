@@ -135,3 +135,13 @@ class BuildTestRequest(BaseModel):
 
 class RenameTestRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
+
+
+class StartClassroomRequest(BaseModel):
+    test_id: str = Field(min_length=1, max_length=100)
+    set_mode: Literal["A", "B", "alternate"] = "alternate"
+    port: int = Field(default=8800, ge=1024, le=65000)
+
+
+class EndClassroomRequest(BaseModel):
+    save: bool = True

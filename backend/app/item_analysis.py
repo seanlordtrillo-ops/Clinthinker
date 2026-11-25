@@ -149,6 +149,17 @@ def parse_results(test: Mapping, content: bytes) -> tuple[list[dict], list[str]]
 def import_results(test_id: str, content: bytes) -> dict:
     test = load_test(test_id)
     students, warnings = parse_results(test, content)
+    save_results(test_id, students)
+    return {
+        "test_id": test_id,
+        "students": len(students),
+        "sets": dict(Counter(student["set"] for student in students)),
+        "warnings": warnings,
+    }
+
+
+def save_results(test_id: str, students: list[dict]) -> None:
+    """Replace the test's class results (from a CSV import or a Classroom Quiz)."""
     with connect() as db:
         db.execute("DELETE FROM assessment_results WHERE test_id=?", (test_id,))
         db.executemany(
@@ -160,12 +171,6 @@ def import_results(test_id: str, content: bytes) -> dict:
                 for student in students
             ],
         )
-    return {
-        "test_id": test_id,
-        "students": len(students),
-        "sets": dict(Counter(student["set"] for student in students)),
-        "warnings": warnings,
-    }
 
 
 def difficulty_label(p: float) -> str:

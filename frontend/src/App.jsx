@@ -94,6 +94,12 @@ export default function App() {
   const [studyProgressBusy, setStudyProgressBusy] = useState(false);
   const [teacherTests, setTeacherTests] = useState([]);
   const [teacherTestsBusy, setTeacherTestsBusy] = useState(false);
+  const [classroomState, setClassroomState] = useState(null);
+  const [classroomEndResult, setClassroomEndResult] = useState(null);
+  const [classroomTestId, setClassroomTestId] = useState("");
+  const [classroomBusy, setClassroomBusy] = useState(false);
+  const [classroomPollError, setClassroomPollError] = useState("");
+  const [classroomCopyNotice, setClassroomCopyNotice] = useState("");
   const [testBuildBusy, setTestBuildBusy] = useState(false);
   const [testOpenBusy, setTestOpenBusy] = useState(false);
   const [testResultsBusy, setTestResultsBusy] = useState(false);
@@ -142,6 +148,8 @@ export default function App() {
   const testResultsInput = useRef(null);
   const testResultRef = useRef(null);
   const shouldScrollToTestRef = useRef(false);
+  const classroomPollTimerRef = useRef(null);
+  const classroomStatusVersionRef = useRef(0);
   const knownQuestionUploadIds = useRef(new Set());
   const answerStateVersion = useRef(0);
   const analysisRequestVersion = useRef(0);
@@ -343,6 +351,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const requestVersion = classroomStatusVersionRef.current;
+    api.classroom()
+      .then((status) => {
+        if (active && requestVersion === classroomStatusVersionRef.current) {
+          setClassroomState(status);
+          setClassroomPollError("");
+        }
+      })
+      .catch((statusError) => {
+        if (active && requestVersion === classroomStatusVersionRef.current) {
+          setClassroomPollError(statusError.message);
+        }
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (page !== "Settings") return;
     let active = true;
     api.trainingTopics(questionDatasetId)
@@ -402,7 +428,7 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
-    if (page !== "Test Builder" && page !== "Item Analysis") return;
+    if (page !== "Test Builder" && page !== "Item Analysis" && page !== "Classroom Quiz") return;
     let active = true;
     setTeacherTestsBusy(true);
     setError("");
@@ -423,6 +449,45 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
+    if (page !== "Classroom Quiz") return undefined;
+    if (!classroomState?.running && classroomState?.state === "ended") return undefined;
+    let active = true;
+    let inFlight = false;
+    let timer = null;
+    setClassroomPollError("");
+    const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      const requestVersion = classroomStatusVersionRef.current;
+      try {
+        const status = await api.classroom();
+        if (active && requestVersion === classroomStatusVersionRef.current) {
+          setClassroomState(status);
+          setClassroomPollError("");
+          if (!status.running && status.state === "ended" && timer) {
+            window.clearInterval(timer);
+            if (classroomPollTimerRef.current === timer) classroomPollTimerRef.current = null;
+          }
+        }
+      } catch {
+        if (active && requestVersion === classroomStatusVersionRef.current) {
+          setClassroomPollError("Lost connection to the quiz. Retrying…");
+        }
+      } finally {
+        inFlight = false;
+      }
+    };
+    timer = window.setInterval(poll, 2000);
+    classroomPollTimerRef.current = timer;
+    void poll();
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      if (classroomPollTimerRef.current === timer) classroomPollTimerRef.current = null;
+    };
+  }, [page, classroomState?.running, classroomState?.state]);
+
+  useEffect(() => {
     if (page === "Test Builder" && testDatasetId === null) {
       setTestDatasetId(questionDatasetId);
     }
@@ -438,6 +503,13 @@ export default function App() {
       setAnalysisTestId(teacherTests[0].id);
     }
   }, [page, analysisTestId, teacherTests]);
+
+  useEffect(() => {
+    if (page !== "Classroom Quiz" || !teacherTests.length) return;
+    if (!teacherTests.some((test) => test.id === classroomTestId)) {
+      setClassroomTestId(teacherTests[0].id);
+    }
+  }, [page, classroomTestId, teacherTests]);
 
   useEffect(() => {
     if (page !== "Item Analysis") return;
@@ -1095,6 +1167,101 @@ export default function App() {
     }
   };
 
+  const startClassroomQuiz = async (testId, setMode) => {
+    if (!testId) {
+      setError("Choose a saved test before starting the quiz.");
+      return;
+    }
+    setClassroomBusy(true);
+    setError("");
+    setNotice("");
+    setClassroomPollError("");
+    setClassroomCopyNotice("");
+    try {
+      const result = await api.startClassroom(testId, setMode);
+      classroomStatusVersionRef.current += 1;
+      setClassroomState(result);
+      setClassroomEndResult(null);
+    } catch (startError) {
+      setError(startError.message);
+    } finally {
+      setClassroomBusy(false);
+    }
+  };
+
+  const endClassroomQuiz = async (save) => {
+    if (!classroomState?.running) return;
+    const notSubmitted = Math.max(
+      0,
+      Number(classroomState.joined || 0) - Number(classroomState.submitted || 0)
+    );
+    if (save && notSubmitted) {
+      const studentWord = notSubmitted === 1 ? "student hasn't" : "students haven't";
+      if (!window.confirm(
+        `${notSubmitted} ${studentWord} submitted. End the quiz anyway? Their answers won't be saved.`
+      )) return;
+    }
+    if (!save && !window.confirm("Cancel the classroom quiz? Student answers will not be saved.")) return;
+    setClassroomBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.endClassroom(save);
+      classroomStatusVersionRef.current += 1;
+      if (classroomPollTimerRef.current) {
+        window.clearInterval(classroomPollTimerRef.current);
+        classroomPollTimerRef.current = null;
+      }
+      setClassroomEndResult(result);
+      setClassroomState((current) => current ? {
+        ...current,
+        running: false,
+        state: "ended",
+        joined: result.joined ?? current.joined,
+        submitted: result.submitted,
+        students: current.students
+      } : current);
+    } catch (endError) {
+      setError(endError.message);
+    } finally {
+      setClassroomBusy(false);
+    }
+  };
+
+  const copyClassroomAddress = async (address) => {
+    try {
+      await navigator.clipboard.writeText(address);
+      setClassroomCopyNotice("Address copied.");
+      setError("");
+    } catch {
+      setClassroomCopyNotice("");
+      setError("Could not copy the student address. Select and copy it manually.");
+    }
+  };
+
+  const openClassroomForTest = (testId) => {
+    setClassroomTestId(testId);
+    setClassroomEndResult(null);
+    setClassroomCopyNotice("");
+    setError("");
+    setNotice("");
+    setPage("Classroom Quiz");
+    setMenuOpen(false);
+  };
+
+  const openClassroomAnalysis = () => {
+    const testId = classroomEndResult?.test_id || classroomState?.test_id;
+    if (!testId) {
+      setError("The classroom quiz test could not be identified.");
+      return;
+    }
+    setAnalysisTestId(testId);
+    setError("");
+    setNotice("");
+    setPage("Item Analysis");
+    setMenuOpen(false);
+  };
+
   const importTeacherTestResults = async (id, file) => {
     if (!id || !file) return;
     setTestResultsBusy(true);
@@ -1505,12 +1672,19 @@ export default function App() {
         }
       }}
     >
-      <Sidebar active={page} onNavigate={(next) => {
-        setPage(next);
-        setMenuOpen(false);
-        setError("");
-        setNotice("");
-      }} open={menuOpen} onClose={() => setMenuOpen(false)} />
+      <Sidebar
+        active={page}
+        classroomRunning={Boolean(classroomState?.running)}
+        onNavigate={(next) => {
+          setPage(next);
+          setMenuOpen(false);
+          setError("");
+          setNotice("");
+          setClassroomCopyNotice("");
+        }}
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+      />
       <main className="main-area medium-main">
         <header className="topbar">
           <button className="menu-trigger" onClick={() => setMenuOpen(true)}><img className="menu-trigger-icon" src={cmuShieldImage} alt="" /><span>MENU</span></button>
@@ -1702,6 +1876,7 @@ export default function App() {
             setPage("Item Analysis");
             setMenuOpen(false);
           }}
+          onStartClassroom={openClassroomForTest}
           onUploadClick={() => lessonFileInput.current?.click()}
           onDownload={(id, documentType, setLabel) => downloadTeacherFile(
             () => api.downloadTestExport(id, documentType, setLabel),
@@ -1711,6 +1886,23 @@ export default function App() {
             () => api.downloadTestResultsTemplate(id),
             "Results template"
           )}
+        />}
+        {page === "Classroom Quiz" && <ClassroomQuizPage
+          tests={teacherTests}
+          testsBusy={teacherTestsBusy}
+          selectedTestId={classroomTestId}
+          onSelectTest={setClassroomTestId}
+          session={classroomState}
+          endResult={classroomEndResult}
+          actionBusy={classroomBusy}
+          error={error}
+          pollError={classroomPollError}
+          notice={notice}
+          copyNotice={classroomCopyNotice}
+          onStart={startClassroomQuiz}
+          onEnd={endClassroomQuiz}
+          onCopyAddress={copyClassroomAddress}
+          onOpenAnalysis={openClassroomAnalysis}
         />}
         {page === "Item Analysis" && <ItemAnalysisPage
           tests={teacherTests}
@@ -2448,7 +2640,7 @@ function TestBuilderPage({
   includeSetB, setIncludeSetB, buildBusy, openBusy, tests, testsBusy, test, testResultRef, tab, setTab,
   previewSet, setPreviewSet, showAnswers, setShowAnswers, showEmptyTopics, setShowEmptyTopics,
   itemCounts, setItemCounts, error, notice, onBuild, onOpenTest, onRenameTest, onDeleteTest,
-  onAnalyzeTest, onUploadClick, onDownload, onDownloadTemplate
+  onAnalyzeTest, onStartClassroom, onUploadClick, onDownload, onDownloadTemplate
 }) {
   const [renamingTestId, setRenamingTestId] = useState(null);
   const [renameValue, setRenameValue] = useState("");
@@ -2758,11 +2950,142 @@ function TestBuilderPage({
               }}><Pencil size={14} /></button>
               <button className="icon-button" type="button" aria-label={`Delete ${savedTest.title}`} onClick={() => onDeleteTest(savedTest)}><Trash2 size={14} /></button>
               <button className="button-outline" type="button" onClick={() => onAnalyzeTest(savedTest.id)}>Analyze</button>
+              <button className="button-outline" type="button" onClick={() => onStartClassroom(savedTest.id)}>Start classroom quiz</button>
             </div>}
           </article>
         ))}</div>
         : !testsBusy && <p className="teacher-empty">No saved tests yet.</p>}
     </section>
+  </section>;
+}
+
+function ClassroomQuizPage({
+  tests, testsBusy, selectedTestId, onSelectTest, session, endResult, actionBusy,
+  error, pollError, notice, copyNotice, onStart, onEnd, onCopyAddress, onOpenAnalysis
+}) {
+  const [setMode, setSetMode] = useState("alternate");
+  const selectedTest = tests.find((test) => test.id === selectedTestId);
+  const hasSetB = selectedTest?.sets?.includes("B") || false;
+  const running = Boolean(session?.running);
+  const ended = !running && session?.state === "ended";
+  const joined = Number(endResult?.joined ?? session?.joined ?? 0);
+  const submitted = Number(endResult?.submitted ?? session?.submitted ?? 0);
+  const students = [...(session?.students || [])].sort((left, right) => (
+    Number(right.submitted) - Number(left.submitted)
+    || left.name.localeCompare(right.name)
+  ));
+  const unansweredNames = endResult?.not_submitted
+    || session?.students?.filter((student) => !student.submitted).map((student) => student.name)
+    || [];
+
+  useEffect(() => {
+    setSetMode(hasSetB ? "alternate" : "A");
+  }, [selectedTestId, hasSetB]);
+
+  return <section className="teacher-page classroom-page">
+    <div className="training-page-heading">
+      <div>
+        <div className="eyebrow"><span className="eyebrow-dot" /> TEACHER TOOLS</div>
+        <h1>Classroom Quiz</h1>
+        <p>Run a live quiz on your local network and save submitted answers for Item Analysis.</p>
+      </div>
+    </div>
+    {error && <AppErrorMessage message={error} />}
+    {pollError && <AppErrorMessage message={pollError} />}
+    {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
+
+    {running && <section className="teacher-panel classroom-running-panel">
+      <div className="classroom-running-heading">
+        <div><h2>{session.title}</h2><p>{session.total_items} questions · {session.set_mode === "alternate" ? "Alternating sets" : `Set ${session.set_mode}`}</p></div>
+        <span className="classroom-live-badge"><i /> Quiz running</span>
+      </div>
+      <div className="classroom-code-block">
+        <span>ROOM CODE</span>
+        <strong aria-label={`Room code ${session.code}`}>{session.code}</strong>
+      </div>
+      <div className="classroom-join-panel">
+        <span className="classroom-section-label">Students open:</span>
+        {session.join_urls?.[0] && <div className="classroom-main-address">
+          <a href={session.join_urls[0]} target="_blank" rel="noreferrer">{session.join_urls[0]}</a>
+          <button className="button-outline" type="button" onClick={() => onCopyAddress(session.join_urls[0])}>Copy</button>
+        </div>}
+        {copyNotice && <div className="classroom-copy-notice">{copyNotice}</div>}
+        {session.join_urls?.length > 1 && <div className="classroom-other-addresses">
+          <span>If that doesn&apos;t work, try:</span>
+          {session.join_urls.slice(1).map((address) => <a href={address} key={address} target="_blank" rel="noreferrer">{address}</a>)}
+        </div>}
+      </div>
+      <div className="classroom-counters">
+        <div><span>Joined</span><strong>{session.joined}</strong></div>
+        <div><span>Submitted</span><strong>{submitted} of {session.joined} submitted</strong></div>
+      </div>
+      <div className="classroom-students">
+        <h3>Students</h3>
+        <div className="teacher-table-wrap"><table className="teacher-table">
+          <thead><tr><th>Name</th><th>Set</th><th>Status</th><th>Score</th></tr></thead>
+          <tbody>{students.length ? students.map((student) => <tr key={`${student.name}-${student.set}`}>
+            <td>{student.name}</td>
+            <td>{student.set}</td>
+            <td>{student.submitted ? "Submitted" : "Answering…"}</td>
+            <td>{student.submitted ? `${student.score} / ${session.total_items}` : "—"}</td>
+          </tr>) : <tr><td colSpan="4">No students have joined yet.</td></tr>}</tbody>
+        </table></div>
+      </div>
+      <div className="classroom-actions">
+        <button className="button-dark" type="button" disabled={actionBusy} onClick={() => onEnd(true)}>
+          {actionBusy ? <><span className="spinner" /> Ending quiz...</> : "End quiz and save results"}
+        </button>
+        <button className="button-outline" type="button" disabled={actionBusy} onClick={() => onEnd(false)}>
+          Cancel quiz
+        </button>
+      </div>
+    </section>}
+
+    {ended && <section className="teacher-panel classroom-ended-panel">
+      <div className="classroom-ended-icon"><Check size={18} /></div>
+      <div>
+        <h2>Quiz ended</h2>
+        <p>{endResult?.message || `${submitted} of ${joined} students submitted · ${endResult?.saved === false ? "results not saved" : "results saved"}`}</p>
+        {unansweredNames.length > 0 && <div className="classroom-unsubmitted">
+          <strong>Did not submit:</strong> {unansweredNames.join(", ")}
+        </div>}
+        <button className="button-dark" type="button" onClick={onOpenAnalysis}>Open Item Analysis</button>
+      </div>
+    </section>}
+
+    {!running && <section className="teacher-panel classroom-start-panel">
+      <div className="section-heading"><div><h2>Before you start</h2></div></div>
+      <ol className="classroom-before-start">
+        <li>Turn on your phone&apos;s or laptop&apos;s hotspot (school Wi-Fi usually blocks this).</li>
+        <li>Connect this laptop and the students&apos; phones to it.</li>
+        <li>The first time, Windows will ask to allow Clinthinker on the network. Choose Private networks and click Allow.</li>
+      </ol>
+      <label className="teacher-field">
+        <span>Saved test</span>
+        <select value={selectedTestId} onChange={(event) => onSelectTest(event.target.value)} disabled={testsBusy || !tests.length}>
+          {!tests.length && <option value="">{testsBusy ? "Loading saved tests..." : "No saved tests"}</option>}
+          {tests.map((test) => <option value={test.id} key={test.id}>
+            {test.title} · {test.total_items} items · Sets {(test.sets || []).join(", ")}
+          </option>)}
+        </select>
+      </label>
+      <label className="teacher-field">
+        <span>Sets</span>
+        <select value={hasSetB ? setMode : "A"} onChange={(event) => setSetMode(event.target.value)} disabled={!selectedTest}>
+          {hasSetB && <option value="alternate">Alternate A and B</option>}
+          <option value="A">Set A only</option>
+          {hasSetB && <option value="B">Set B only</option>}
+        </select>
+      </label>
+      <button
+        className="button-dark classroom-start-button"
+        type="button"
+        disabled={actionBusy || testsBusy || !selectedTest}
+        onClick={() => onStart(selectedTestId, hasSetB ? setMode : "A")}
+      >
+        {actionBusy ? <><span className="spinner" /> Starting quiz...</> : "Start quiz"}
+      </button>
+    </section>}
   </section>;
 }
 

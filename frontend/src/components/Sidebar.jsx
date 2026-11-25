@@ -1,6 +1,6 @@
 import {
   BarChart3, CircleHelp, ClipboardList, Database, FileQuestion, FileUp, NotebookText,
-  Settings2, ShieldCheck, TrendingUp
+  Settings2, ShieldCheck, Smartphone, TrendingUp
 } from "lucide-react";
 import cmuLogoFull from "../assets/cmu-logo-full.png";
 import cmuLogoFullBlueText from "../assets/cmu-logo-full-blue-text (1).png";
@@ -17,10 +17,11 @@ const items = [
 ];
 const teacherItems = [
   ["Test Builder", ClipboardList],
-  ["Item Analysis", BarChart3]
+  ["Item Analysis", BarChart3],
+  ["Classroom Quiz", Smartphone]
 ];
 
-export default function Sidebar({ active, onNavigate, open, onClose }) {
+export default function Sidebar({ active, onNavigate, open, onClose, classroomRunning }) {
   return (
     <>
       {open && <button className="drawer-scrim" aria-label="Close menu" onClick={onClose} />}
@@ -47,6 +48,9 @@ export default function Sidebar({ active, onNavigate, open, onClose }) {
             <button key={label} className={`nav-item ${active === label ? "nav-active" : ""}`} onClick={() => onNavigate(label)}>
               <Icon size={18} strokeWidth={1.8} />
               <span>{label}</span>
+              {label === "Classroom Quiz" && classroomRunning && (
+                <span className="classroom-running-badge">Quiz running</span>
+              )}
               {active === label && <span className="nav-pip" />}
             </button>
           ))}

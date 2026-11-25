@@ -9,6 +9,18 @@
   },
   {
     "method": "get",
+    "path": "/api/classroom"
+  },
+  {
+    "method": "post",
+    "path": "/api/classroom/end"
+  },
+  {
+    "method": "post",
+    "path": "/api/classroom/start"
+  },
+  {
+    "method": "get",
     "path": "/api/diagnostics"
   },
   {

@@ -172,6 +172,17 @@ export const api = {
     return apiRequest(`/api/tests/${encodeURIComponent(id)}/results`, { method: "POST", body });
   },
   testAnalysis: (id) => apiRequest(`/api/tests/${encodeURIComponent(id)}/analysis`),
+  classroom: () => apiRequest("/api/classroom"),
+  startClassroom: (testId, setMode = "alternate") => apiRequest("/api/classroom/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ test_id: testId, set_mode: setMode })
+  }),
+  endClassroom: (save = true) => apiRequest("/api/classroom/end", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ save })
+  }),
   downloadTestExport: (id, document, setLabel = null) => {
     const params = new URLSearchParams({ document });
     if (setLabel) params.set("set_label", setLabel);
