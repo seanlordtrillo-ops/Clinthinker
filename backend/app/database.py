@@ -216,6 +216,23 @@ def initialize() -> None:
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY(upload_id, topic)
             );
+            -- Teacher tests: questions, Table of Specifications and Set A/B order as JSON.
+            CREATE TABLE IF NOT EXISTS assessment_tests (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                details TEXT NOT NULL
+            );
+            -- One row per student's answer sheet imported for item analysis.
+            CREATE TABLE IF NOT EXISTS assessment_results (
+                id TEXT PRIMARY KEY,
+                test_id TEXT NOT NULL REFERENCES assessment_tests(id) ON DELETE CASCADE,
+                student_name TEXT NOT NULL,
+                set_label TEXT NOT NULL,
+                answers TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                imported_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
             """
         )
         upload_columns = {

@@ -70,9 +70,31 @@ export default function App() {
   const [questionExplanations, setQuestionExplanations] = useState({});
   const [selectedQuestionAnswers, setSelectedQuestionAnswers] = useState({});
   const [questionAttemptResults, setQuestionAttemptResults] = useState({});
+  const [selectedPracticeTopic, setSelectedPracticeTopic] = useState(null);
   const [checkingQuestionId, setCheckingQuestionId] = useState(null);
   const [studyProgress, setStudyProgress] = useState(null);
   const [studyProgressBusy, setStudyProgressBusy] = useState(false);
+  const [teacherTests, setTeacherTests] = useState([]);
+  const [teacherTestsBusy, setTeacherTestsBusy] = useState(false);
+  const [testBuildBusy, setTestBuildBusy] = useState(false);
+  const [testOpenBusy, setTestOpenBusy] = useState(false);
+  const [testResultsBusy, setTestResultsBusy] = useState(false);
+  const [testTitle, setTestTitle] = useState("");
+  const [testDatasetId, setTestDatasetId] = useState(null);
+  const [testLessonUploadIds, setTestLessonUploadIds] = useState([]);
+  const [testItemCount, setTestItemCount] = useState(30);
+  const [testQuestionTypes, setTestQuestionTypes] = useState(["Multiple Choice"]);
+  const [testIncludeSetB, setTestIncludeSetB] = useState(true);
+  const [builtTest, setBuiltTest] = useState(null);
+  const [testTab, setTestTab] = useState("specification");
+  const [previewSet, setPreviewSet] = useState("A");
+  const [showTestAnswers, setShowTestAnswers] = useState(false);
+  const [showEmptyTestTopics, setShowEmptyTestTopics] = useState(false);
+  const [specItemCounts, setSpecItemCounts] = useState({});
+  const [analysisTestId, setAnalysisTestId] = useState("");
+  const [testAnalysis, setTestAnalysis] = useState(null);
+  const [testAnalysisBusy, setTestAnalysisBusy] = useState(false);
+  const [analysisFilter, setAnalysisFilter] = useState("All");
 
   useEffect(() => {
     if (!printingSavedSessionId) return undefined;
@@ -99,8 +121,94 @@ export default function App() {
   const trainingFileInput = useRef(null);
   const lessonFileInput = useRef(null);
   const csvInput = useRef(null);
+  const testResultsInput = useRef(null);
+  const testResultRef = useRef(null);
+  const shouldScrollToTestRef = useRef(false);
   const knownQuestionUploadIds = useRef(new Set());
   const answerStateVersion = useRef(0);
+  const analysisRequestVersion = useRef(0);
+
+  useEffect(() => {
+    if (!builtTest || !shouldScrollToTestRef.current) return undefined;
+    shouldScrollToTestRef.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      testResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [builtTest]);
+
+  const refreshTeacherTests = async () => {
+    setTeacherTestsBusy(true);
+    try {
+      const { tests: savedTests } = await api.tests();
+      const sortedTests = [...savedTests].sort(
+        (left, right) => new Date(right.created_at) - new Date(left.created_at)
+      );
+      setTeacherTests(sortedTests);
+      return sortedTests;
+    } catch (loadError) {
+      setError(`Tests could not be loaded: ${loadError.message}`);
+      return null;
+    } finally {
+      setTeacherTestsBusy(false);
+    }
+  };
+
+  const loadTeacherTest = async (id) => {
+    setTestOpenBusy(true);
+    setError("");
+    try {
+      const loadedTest = await api.test(id);
+      shouldScrollToTestRef.current = true;
+      setBuiltTest(loadedTest);
+      setTestTitle(loadedTest.title);
+      setTestItemCount(loadedTest.total_items);
+      setTestQuestionTypes(loadedTest.question_types);
+      setTestIncludeSetB(Boolean(loadedTest.sets?.B));
+      setTestLessonUploadIds(uploads
+        .filter((upload) => (loadedTest.lesson_names || []).includes(upload.name) && !upload.is_exam)
+        .map((upload) => upload.id));
+      setTestDatasetId(datasets.find(
+        (dataset) => dataset.name === loadedTest.training_dataset_name
+      )?.id || questionDatasetId);
+      setSpecItemCounts(Object.fromEntries(
+        (loadedTest.specification?.rows || []).map((row) => [row.topic, String(row.items)])
+      ));
+      setTestTab("preview");
+      setPreviewSet("A");
+      setShowTestAnswers(false);
+      return loadedTest;
+    } catch (loadError) {
+      shouldScrollToTestRef.current = false;
+      setError(`Test could not be opened: ${loadError.message}`);
+      return null;
+    } finally {
+      setTestOpenBusy(false);
+    }
+  };
+
+  const loadTestAnalysis = async (id) => {
+    if (!id) {
+      setTestAnalysis(null);
+      return null;
+    }
+    const requestVersion = ++analysisRequestVersion.current;
+    setTestAnalysisBusy(true);
+    setTestAnalysis(null);
+    setError("");
+    try {
+      const analysis = await api.testAnalysis(id);
+      if (requestVersion === analysisRequestVersion.current) setTestAnalysis(analysis);
+      return analysis;
+    } catch (analysisError) {
+      if (requestVersion === analysisRequestVersion.current) {
+        setError(analysisError.message);
+      }
+      return null;
+    } finally {
+      if (requestVersion === analysisRequestVersion.current) setTestAnalysisBusy(false);
+    }
+  };
 
   const refreshStudyProgress = async () => {
     setStudyProgressBusy(true);
@@ -275,6 +383,55 @@ export default function App() {
   }, [page]);
 
   useEffect(() => {
+    if (page !== "Test Builder" && page !== "Item Analysis") return;
+    let active = true;
+    setTeacherTestsBusy(true);
+    setError("");
+    api.tests()
+      .then(({ tests: savedTests }) => {
+        if (!active) return;
+        setTeacherTests([...savedTests].sort(
+          (left, right) => new Date(right.created_at) - new Date(left.created_at)
+        ));
+      })
+      .catch((loadError) => {
+        if (active) setError(`Tests could not be loaded: ${loadError.message}`);
+      })
+      .finally(() => {
+        if (active) setTeacherTestsBusy(false);
+      });
+    return () => { active = false; };
+  }, [page]);
+
+  useEffect(() => {
+    if (page === "Test Builder" && testDatasetId === null) {
+      setTestDatasetId(questionDatasetId);
+    }
+  }, [page, questionDatasetId, testDatasetId]);
+
+  useEffect(() => {
+    if (page !== "Item Analysis") return;
+    if (!teacherTests.length) {
+      if (analysisTestId) setAnalysisTestId("");
+      return;
+    }
+    if (!teacherTests.some((test) => test.id === analysisTestId)) {
+      setAnalysisTestId(teacherTests[0].id);
+    }
+  }, [page, analysisTestId, teacherTests]);
+
+  useEffect(() => {
+    if (page !== "Item Analysis") return;
+    if (!analysisTestId) {
+      analysisRequestVersion.current += 1;
+      setTestAnalysis(null);
+      setTestAnalysisBusy(false);
+      return;
+    }
+    void loadTestAnalysis(analysisTestId);
+  }, [page, analysisTestId]);
+
+  useEffect(() => {
     document.documentElement.dataset.appearance = settings.appearance;
     document.title = "Clinthinker©";
     const themeColors = { orange: "#100d0a", pink: "#fff8fc", regal: "#171225", cmu: "#f6f9fc" };
@@ -343,7 +500,7 @@ export default function App() {
         setSelectedQuestionAnswers({});
         setQuestionsSaved(false);
         if (remainingLessons.length) {
-          await generateQuestions({ lessons: remainingLessons });
+          await generateQuestions({ lessons: remainingLessons, topic: selectedPracticeTopic || "All Topics" });
         } else {
           setLessonProgress(null);
         }
@@ -672,10 +829,12 @@ export default function App() {
 
   const generateQuestions = async ({
     lessons: lessonOverride = lessonUploads,
-    useStyle = useExamStyle
+    useStyle = useExamStyle,
+    topic = "All Topics"
   } = {}) => {
     setError("");
     setNotice("");
+    setSelectedPracticeTopic(topic === "All Topics" ? null : topic);
     const selectedLessons = lessonOverride.filter((lesson) => lesson.status === "Ready");
     const useLesson = selectedLessons.length > 0;
     const uploadIds = useLesson
@@ -709,7 +868,7 @@ export default function App() {
         lesson_upload_ids: useLesson ? uploadIds : [],
         lesson_only: useLesson,
         use_exam_style: useStyle,
-        topic: "All Topics",
+        topic,
         question_type: questionForm.question_type,
         difficulty: "Moderate",
         number_of_questions: Number(questionForm.number_of_questions),
@@ -746,7 +905,9 @@ export default function App() {
       }
       return result;
     } catch (generationError) {
-      setError(`Questions could not be generated: ${generationError.message}`);
+      setError(generationError.status === 422
+        ? generationError.message
+        : `Questions could not be generated: ${generationError.message}`);
       if (useLesson) {
         setLessonProgress({
           phase: "error",
@@ -756,6 +917,144 @@ export default function App() {
       return null;
     } finally {
       setQuestionBusy(false);
+    }
+  };
+
+  const practiceProgressTopic = (topic) => {
+    setPage("Generate Practice Questions");
+    setMenuOpen(false);
+    setQuestionResult(null);
+    setQuestionAnswers({});
+    setQuestionExplanations({});
+    setQuestionsSaved(false);
+    void generateQuestions({ topic });
+  };
+
+  const buildTeacherTest = async (itemsPerTopic = null) => {
+    const title = testTitle.trim();
+    const totalItems = Number(testItemCount);
+    if (!title) {
+      setError("Enter a title for the test.");
+      return null;
+    }
+    if (!Number.isInteger(totalItems) || totalItems < 5 || totalItems > 100) {
+      setError("Number of items must be a whole number from 5 to 100.");
+      return null;
+    }
+    if (!testLessonUploadIds.length) {
+      setError("Select at least one lesson for the test.");
+      return null;
+    }
+    if (!testQuestionTypes.length) {
+      setError("Select at least one question type.");
+      return null;
+    }
+    setTestBuildBusy(true);
+    setError("");
+    setNotice("");
+    const payload = {
+      title,
+      training_dataset_id: testDatasetId || questionDatasetId,
+      lesson_upload_ids: testLessonUploadIds,
+      total_items: totalItems,
+      question_types: testQuestionTypes,
+      include_set_b: testIncludeSetB
+    };
+    if (itemsPerTopic) payload.items_per_topic = itemsPerTopic;
+    try {
+      const result = await api.buildTest(payload);
+      setBuiltTest(result);
+      setTestTitle(result.title);
+      setTestItemCount(result.total_items);
+      setSpecItemCounts(Object.fromEntries(
+        result.specification.rows.map((row) => [row.topic, String(row.items)])
+      ));
+      setTestTab("specification");
+      setPreviewSet("A");
+      setShowTestAnswers(false);
+      setNotice(`Test "${result.title}" built with ${result.total_items} items.`);
+      await refreshTeacherTests();
+      return result;
+    } catch (buildError) {
+      setError(`Test could not be built: ${buildError.message}`);
+      return null;
+    } finally {
+      setTestBuildBusy(false);
+    }
+  };
+
+  const renameTeacherTest = async (id, title) => {
+    if (!title.trim()) {
+      setError("Test title cannot be empty.");
+      return false;
+    }
+    setError("");
+    try {
+      const updated = await api.renameTest(id, title.trim());
+      setTeacherTests((current) => current.map((item) => (
+        item.id === id ? { ...item, title: updated.title } : item
+      )));
+      setBuiltTest((current) => current?.id === id
+        ? { ...current, title: updated.title }
+        : current);
+      setNotice("Test renamed.");
+      return true;
+    } catch (renameError) {
+      setError(`Test could not be renamed: ${renameError.message}`);
+      return false;
+    }
+  };
+
+  const deleteTeacherTest = async (savedTest) => {
+    if (!window.confirm(`Delete "${savedTest.title}" and its test materials?`)) return;
+    setError("");
+    try {
+      await api.deleteTest(savedTest.id);
+      const remaining = teacherTests.filter((item) => item.id !== savedTest.id);
+      setTeacherTests(remaining);
+      if (builtTest?.id === savedTest.id) setBuiltTest(null);
+      if (analysisTestId === savedTest.id) setAnalysisTestId(remaining[0]?.id || "");
+      setNotice(`Test "${savedTest.title}" deleted.`);
+    } catch (deleteError) {
+      setError(`Test could not be deleted: ${deleteError.message}`);
+    }
+  };
+
+  const importTeacherTestResults = async (id, file) => {
+    if (!id || !file) return;
+    setTestResultsBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.importTestResults(id, file);
+      const setCounts = Object.entries(result.sets || {})
+        .map(([label, count]) => `Set ${label}: ${count}`)
+        .join(", ");
+      setNotice(
+        `Imported results for ${result.students} students${setCounts ? ` (${setCounts})` : ""}.`
+        + (result.warnings?.length ? ` ${result.warnings.join(" ")}` : "")
+      );
+      await refreshTeacherTests();
+      await loadTestAnalysis(id);
+    } catch (importError) {
+      setError(`Results could not be imported: ${importError.message}`);
+    } finally {
+      setTestResultsBusy(false);
+    }
+  };
+
+  const downloadTeacherFile = async (request, description) => {
+    setError("");
+    try {
+      const { blob, filename } = await request();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (downloadError) {
+      setError(`${description} could not be downloaded: ${downloadError.message}`);
     }
   };
 
@@ -857,7 +1156,7 @@ export default function App() {
         } catch (refreshError) {
           uploadErrors.push(`Saved upload list could not refresh: ${refreshError.message}`);
         }
-        await generateQuestions({ lessons: readyLessons });
+        await generateQuestions({ lessons: readyLessons, topic: selectedPracticeTopic || "All Topics" });
       }
     } finally {
       setLessonUploadBusy(false);
@@ -877,7 +1176,7 @@ export default function App() {
     setSelectedQuestionAnswers({});
     setQuestionsSaved(false);
     if (remainingLessons.some((lesson) => lesson.status === "Ready")) {
-      void generateQuestions({ lessons: remainingLessons });
+      void generateQuestions({ lessons: remainingLessons, topic: selectedPracticeTopic || "All Topics" });
     } else {
       setLessonProgress(null);
     }
@@ -886,7 +1185,11 @@ export default function App() {
   const changeExamStyle = (enabled) => {
     setUseExamStyle(enabled);
     if (lessonUploads.some((lesson) => lesson.status === "Ready")) {
-      void generateQuestions({ lessons: lessonUploads, useStyle: enabled });
+      void generateQuestions({
+        lessons: lessonUploads,
+        useStyle: enabled,
+        topic: selectedPracticeTopic || "All Topics"
+      });
     }
   };
 
@@ -1241,6 +1544,8 @@ export default function App() {
           onOpenSettings={() => setPage("Settings")}
           result={questionResult}
           questionSetUnavailable={questionSetUnavailable}
+          selectedTopic={selectedPracticeTopic}
+          onClearTopic={() => generateQuestions({ topic: "All Topics" })}
           preferences={questionPreferences}
           answers={questionAnswers}
           explanations={questionExplanations}
@@ -1251,7 +1556,9 @@ export default function App() {
           onSubmitAnswer={checkGeneratedAnswer}
           busy={questionBusy}
           saved={questionsSaved}
-          onGenerate={generateQuestions}
+          onGenerate={selectedPracticeTopic
+            ? () => generateQuestions({ topic: selectedPracticeTopic })
+            : generateQuestions}
           onSave={saveGeneratedQuestions}
           onRevealAnswers={revealGeneratedAnswers}
           onRateQuestion={rateQuestion}
@@ -1271,6 +1578,75 @@ export default function App() {
           onRefresh={refreshStudyProgress}
           onClearProgress={clearStudyProgress}
           onError={setError}
+          onPracticeTopic={practiceProgressTopic}
+        />}
+        {page === "Test Builder" && <TestBuilderPage
+          uploads={uploads.filter((upload) => !upload.is_exam)}
+          datasets={datasets}
+          selectedDatasetId={testDatasetId || questionDatasetId}
+          setSelectedDatasetId={setTestDatasetId}
+          lessonIds={testLessonUploadIds}
+          setLessonIds={setTestLessonUploadIds}
+          title={testTitle}
+          setTitle={setTestTitle}
+          itemCount={testItemCount}
+          setItemCount={setTestItemCount}
+          questionTypes={testQuestionTypes}
+          setQuestionTypes={setTestQuestionTypes}
+          includeSetB={testIncludeSetB}
+          setIncludeSetB={setTestIncludeSetB}
+          buildBusy={testBuildBusy}
+          openBusy={testOpenBusy}
+          tests={teacherTests}
+          testsBusy={teacherTestsBusy}
+          test={builtTest}
+          testResultRef={testResultRef}
+          tab={testTab}
+          setTab={setTestTab}
+          previewSet={previewSet}
+          setPreviewSet={setPreviewSet}
+          showAnswers={showTestAnswers}
+          setShowAnswers={setShowTestAnswers}
+          showEmptyTopics={showEmptyTestTopics}
+          setShowEmptyTopics={setShowEmptyTestTopics}
+          itemCounts={specItemCounts}
+          setItemCounts={setSpecItemCounts}
+          error={error}
+          notice={notice}
+          onBuild={buildTeacherTest}
+          onOpenTest={loadTeacherTest}
+          onRenameTest={renameTeacherTest}
+          onDeleteTest={deleteTeacherTest}
+          onAnalyzeTest={(id) => {
+            setAnalysisTestId(id);
+            setPage("Item Analysis");
+            setMenuOpen(false);
+          }}
+          onUploadClick={() => lessonFileInput.current?.click()}
+          onDownload={(id, documentType, setLabel) => downloadTeacherFile(
+            () => api.downloadTestExport(id, documentType, setLabel),
+            documentType === "test" ? `Set ${setLabel} test paper` : documentType
+          )}
+          onDownloadTemplate={(id) => downloadTeacherFile(
+            () => api.downloadTestResultsTemplate(id),
+            "Results template"
+          )}
+        />}
+        {page === "Item Analysis" && <ItemAnalysisPage
+          tests={teacherTests}
+          testsBusy={teacherTestsBusy}
+          selectedTestId={analysisTestId}
+          onSelectTest={setAnalysisTestId}
+          analysis={testAnalysis}
+          analysisBusy={testAnalysisBusy}
+          resultsBusy={testResultsBusy}
+          resultsInput={testResultsInput}
+          error={error}
+          notice={notice}
+          onDownloadTemplate={(id) => downloadTeacherFile(
+            () => api.downloadTestResultsTemplate(id),
+            "Results template"
+          )}
         />}
         {page === "Settings" && <SettingsPage
           settings={settings}
@@ -1346,6 +1722,16 @@ export default function App() {
           accept=".csv,text/csv"
           onChange={(event) => { importTrainingCsv(event.target.files?.[0]); event.target.value = ""; }}
         />
+        <input
+          ref={testResultsInput}
+          className="hidden-input"
+          type="file"
+          accept=".csv,text/csv"
+          onChange={(event) => {
+            importTeacherTestResults(analysisTestId, event.target.files?.[0]);
+            event.target.value = "";
+          }}
+        />
       </main>
       {dragging && <div className="global-drop-overlay"><div><Upload size={30} /><strong>Drop course files to add them</strong><span>PDF, DOCX, or TXT · Stored locally</span></div></div>}
     </div>
@@ -1356,7 +1742,7 @@ function PracticeQuestionsPage({
   datasets, uploads, selectedDatasetId, selectedUploadIds, lessonUploads,
   lessonUploadBusy, lessonProgress, useExamStyle, onChangeExamStyle, lessonUploadInput,
   onUploadLessons, onRemoveLesson, form, onOpenSettings,
-  result, preferences, answers, explanations, selectedAnswers, submittedAnswers,
+  result, selectedTopic, onClearTopic, preferences, answers, explanations, selectedAnswers, submittedAnswers,
   checkingQuestionId, onSelectAnswer, onSubmitAnswer, busy, saved, questionSetUnavailable, onGenerate, onSave, onRevealAnswers,
   onBack, error, notice, onRateQuestion, onResetPreferences, onResetQuestionHistory
 }) {
@@ -1529,6 +1915,10 @@ function PracticeQuestionsPage({
     />}
     {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
     {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
+    {selectedTopic && <div className="practice-topic-filter">
+      <span>Topic: {selectedTopic}</span>
+      <button type="button" className="icon-button" aria-label="Clear topic filter" onClick={onClearTopic}><X size={14} /></button>
+    </div>}
 
     {result && <div className="question-results">
       {result.likely_topics && <section className="likely-topics-panel">
@@ -1726,7 +2116,7 @@ function AnswerResult({ result }) {
 }
 
 function MyProgressPage({
-  data, busy, error, notice, onNavigate, onAnswer, onRefresh, onClearProgress, onError
+  data, busy, error, notice, onNavigate, onPracticeTopic, onAnswer, onRefresh, onClearProgress, onError
 }) {
   const [mistakesOnly, setMistakesOnly] = useState(false);
   const [reviewQuestions, setReviewQuestions] = useState([]);
@@ -1851,7 +2241,7 @@ function MyProgressPage({
                 type="button"
                 onClick={() => topic.due_reviews > 0
                   ? startReview(topic.topic)
-                  : onNavigate("Generate Practice Questions")}
+                  : onPracticeTopic(topic.topic)}
               >{topic.due_reviews > 0 ? `Review ${topic.due_reviews} questions` : "Practice this topic"}</button>
             </article>
           ))}</div>
@@ -1952,6 +2342,505 @@ function MasteryBar({ mastery }) {
   return <span className="mastery-bar" aria-label={`${Math.round(percent)}% mastery`}>
     <i style={{ width: `${percent}%` }} />
   </span>;
+}
+
+function formatItemRanges(numbers = []) {
+  const sorted = [...numbers].sort((left, right) => left - right);
+  const ranges = [];
+  let start = sorted[0];
+  let end = sorted[0];
+  for (const number of sorted.slice(1)) {
+    if (number === end + 1) {
+      end = number;
+    } else {
+      ranges.push(start === end ? String(start) : `${start}-${end}`);
+      start = number;
+      end = number;
+    }
+  }
+  if (start !== undefined) ranges.push(start === end ? String(start) : `${start}-${end}`);
+  return ranges.join(", ");
+}
+
+function TestBuilderPage({
+  uploads, datasets, selectedDatasetId, setSelectedDatasetId, lessonIds, setLessonIds,
+  lessonUploadInput, title, setTitle, itemCount, setItemCount, questionTypes, setQuestionTypes,
+  includeSetB, setIncludeSetB, buildBusy, openBusy, tests, testsBusy, test, testResultRef, tab, setTab,
+  previewSet, setPreviewSet, showAnswers, setShowAnswers, showEmptyTopics, setShowEmptyTopics,
+  itemCounts, setItemCounts, error, notice, onBuild, onOpenTest, onRenameTest, onDeleteTest,
+  onAnalyzeTest, onUploadClick, onDownload, onDownloadTemplate
+}) {
+  const [renamingTestId, setRenamingTestId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const lessonOptions = uploads.filter((upload) => !upload.is_exam);
+  const availableSets = test?.sets?.B ? ["A", "B"] : ["A"];
+  const activeSet = availableSets.includes(previewSet) ? previewSet : "A";
+
+  const toggleQuestionType = (type) => {
+    setQuestionTypes((current) => current.includes(type)
+      ? current.length > 1 ? current.filter((value) => value !== type) : current
+      : [...current, type]);
+  };
+
+  const rebuildWithCounts = () => {
+    if (!test?.specification?.rows) return;
+    const counts = Object.fromEntries(test.specification.rows.map((row) => [
+      row.topic,
+      Math.max(0, Number(itemCounts[row.topic] ?? row.items) || 0)
+    ]));
+    void onBuild(counts);
+  };
+
+  const saveRename = async (savedTest) => {
+    if (await onRenameTest(savedTest.id, renameValue)) setRenamingTestId(null);
+  };
+
+  const renderSpecification = () => {
+    const rows = test.specification.rows || [];
+    const visibleRows = showEmptyTopics ? rows : rows.filter((row) => row.items > 0);
+    const rememberingTotal = rows.reduce(
+      (sum, row) => sum + (row.cognitive_levels?.Remembering || 0), 0
+    );
+    return <div className="test-specification">
+      <label className="test-toggle">
+        <input type="checkbox" checked={showEmptyTopics} onChange={(event) => setShowEmptyTopics(event.target.checked)} />
+        <span>Show topics with no items</span>
+      </label>
+      <div className="test-table-wrap"><table className="teacher-table">
+        <thead><tr>
+          <th>Topic</th><th>Lesson passages</th><th>Weight %</th><th>No. of items</th>
+          <th>% of test</th><th>Remembering</th><th>Item placement</th>
+        </tr></thead>
+        <tbody>
+          {visibleRows.map((row) => <tr key={row.topic}>
+            <td>{row.topic}</td>
+            <td>{row.lesson_passages}</td>
+            <td>{Number(row.weight_percent).toFixed(1)}%</td>
+            <td><input
+              className="spec-item-count"
+              type="number"
+              min="0"
+              max={row.questions_available}
+              value={itemCounts[row.topic] ?? row.items}
+              onChange={(event) => setItemCounts((current) => ({
+                ...current,
+                [row.topic]: event.target.value
+              }))}
+              aria-label={`Items for ${row.topic}`}
+            /></td>
+            <td>{Number(row.percent_of_test).toFixed(1)}%</td>
+            <td>{row.cognitive_levels?.Remembering || 0}</td>
+            <td>{formatItemRanges(row.item_numbers)}</td>
+          </tr>)}
+          <tr className="teacher-table-total">
+            <th>Total</th>
+            <td>{test.specification.totals.lesson_passages}</td>
+            <td>100%</td>
+            <td>{test.specification.totals.items}</td>
+            <td>100%</td>
+            <td>{rememberingTotal}</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table></div>
+      <button className="button-dark" type="button" disabled={buildBusy} onClick={rebuildWithCounts}>
+        {buildBusy ? <><span className="spinner" /> Rebuilding...</> : "Rebuild with these numbers"}
+      </button>
+      <p className="teacher-method-note">{test.specification.method}</p>
+    </div>;
+  };
+
+  const renderPreview = () => {
+    const entries = test.sets?.[activeSet] || [];
+    const sections = [
+      ["Multiple Choice", "Test I. Multiple Choice"],
+      ["True or False", "Test II. True or False"],
+      ["Identification", "Test III. Identification"]
+    ];
+    return <div className="test-preview">
+      <div className="test-preview-controls">
+        <div className="test-set-switch" aria-label="Test set">
+          {availableSets.map((label) => <button
+            className={activeSet === label ? "test-tab-active" : ""}
+            type="button"
+            key={label}
+            onClick={() => setPreviewSet(label)}
+          >Set {label}</button>)}
+        </div>
+        <label className="test-toggle">
+          <input type="checkbox" checked={showAnswers} onChange={(event) => setShowAnswers(event.target.checked)} />
+          <span>Show answers</span>
+        </label>
+      </div>
+      {sections.map(([type, heading]) => {
+        const questions = entries
+          .map((entry, index) => ({ entry, number: index + 1, item: test.items[entry.item] }))
+          .filter(({ item }) => item?.question_type === type);
+        if (!questions.length) return null;
+        return <section className="test-preview-section" key={type}>
+          <h3>{heading}</h3>
+          {questions.map(({ entry, number, item }) => {
+            const answerKey = test.answer_keys?.[activeSet]?.find((answer) => answer.number === number);
+            const choices = entry.choices || item.choices || [];
+            const answerLetter = String(answerKey?.answer || "").trim().toUpperCase();
+            const correctIndex = /^[A-D]$/.test(answerLetter)
+              ? answerLetter.charCodeAt(0) - 65
+              : choices.findIndex((choice) => choice === (answerKey?.answer_text || item.correct_answer));
+            return <article className="test-preview-item" key={`${activeSet}-${number}`}>
+              <p><strong>{number}.</strong> {item.question_text}</p>
+              {type === "Multiple Choice" && <ol className="test-preview-choices">
+                {choices.map((choice, index) => <li
+                  className={showAnswers && index === correctIndex ? "test-preview-answer" : ""}
+                  key={`${number}-${index}`}
+                ><span>{String.fromCharCode(65 + index)}.</span>{choice}</li>)}
+              </ol>}
+              {type === "True or False" && <p className="test-preview-response">True / False: ____________________</p>}
+              {type === "Identification" && <p className="test-preview-response" />}
+              {showAnswers && <>
+                <p className="test-preview-answer-text">
+                  <strong>Answer:</strong> {answerKey?.answer || item.correct_answer}
+                  {answerKey?.answer_text ? ` · ${answerKey.answer_text}` : ""}
+                </p>
+                {item.explanation && <p className="test-preview-explanation">{item.explanation}</p>}
+              </>}
+            </article>;
+          })}
+        </section>;
+      })}
+    </div>;
+  };
+
+  const renderAnswerKey = () => {
+    const setLabels = test.sets?.B ? ["A", "B"] : ["A"];
+    const maxNumber = Math.max(0, ...setLabels.map((label) => test.answer_keys?.[label]?.length || 0));
+    return <div className="test-table-wrap"><table className="teacher-table">
+      <thead><tr><th>No.</th>{setLabels.map((label) => <th key={label}>Set {label}</th>)}</tr></thead>
+      <tbody>{Array.from({ length: maxNumber }, (_, index) => {
+        const number = index + 1;
+        return <tr key={number}>
+          <td>{number}</td>
+          {setLabels.map((label) => {
+            const answer = test.answer_keys?.[label]?.find((item) => item.number === number);
+            return <td key={label}>{answer
+              ? `${answer.answer}${answer.answer_text ? ` · ${answer.answer_text}` : ""}`
+              : "—"}</td>;
+          })}
+        </tr>;
+      })}</tbody>
+    </table></div>;
+  };
+
+  return <section className="teacher-page">
+    <div className="training-page-heading">
+      <div>
+        <div className="eyebrow"><span className="eyebrow-dot" /> TEACHER TOOLS</div>
+        <h1>Test Builder</h1>
+        <p>Assemble balanced tests and export student papers, keys, and specifications.</p>
+      </div>
+    </div>
+    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
+
+    <section className="teacher-panel test-builder-form">
+      <div className="section-heading"><div><h2>Build a test</h2><p>Choose lessons and the assessment format.</p></div></div>
+      <label className="teacher-field">
+        <span>Test title</span>
+        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. HCI Midterm" />
+      </label>
+      <div className="teacher-form-grid">
+        <label className="teacher-field">
+          <span>Training dataset</span>
+          <select value={selectedDatasetId} onChange={(event) => setSelectedDatasetId(event.target.value)}>
+            {datasets.map((dataset) => <option value={dataset.id} key={dataset.id}>{dataset.name}</option>)}
+          </select>
+        </label>
+        <label className="teacher-field">
+          <span>Number of items (5–100)</span>
+          <input
+            type="number"
+            min="5"
+            max="100"
+            step="1"
+            value={itemCount}
+            onChange={(event) => setItemCount(event.target.value === "" ? "" : Math.max(5, Math.min(100, Number(event.target.value))))}
+          />
+        </label>
+      </div>
+      <div className="teacher-field teacher-lessons-field">
+        <div className="teacher-field-heading">
+          <span>Lessons</span>
+          <button className="button-outline" type="button" onClick={onUploadClick}><Upload size={13} /> Upload lessons</button>
+        </div>
+        {uploads.length
+          ? <div className="teacher-lesson-list">{uploads.map((upload) => <label className="teacher-lesson-option" key={upload.id}>
+            <input
+              type="checkbox"
+              checked={lessonIds.includes(upload.id)}
+              onChange={() => setLessonIds((current) => current.includes(upload.id)
+                ? current.filter((id) => id !== upload.id)
+                : [...current, upload.id])}
+            />
+            <span>{upload.name}</span>
+          </label>)}</div>
+          : <p className="teacher-empty">Upload course lessons to build a test.</p>}
+      </div>
+      <fieldset className="teacher-question-types">
+        <legend>Question types</legend>
+        {["Multiple Choice", "True or False", "Identification"].map((type) => (
+          <label key={type}>
+            <input
+              type="checkbox"
+              checked={questionTypes.includes(type)}
+              disabled={questionTypes.length === 1 && questionTypes.includes(type)}
+              onChange={() => toggleQuestionType(type)}
+            />
+            <span>{type}</span>
+          </label>
+        ))}
+      </fieldset>
+      <label className="test-toggle test-set-b-toggle">
+        <input type="checkbox" checked={includeSetB} onChange={(event) => setIncludeSetB(event.target.checked)} />
+        <span>Make a Set B (shuffled)</span>
+      </label>
+      <button className="button-dark test-build-button" type="button" disabled={buildBusy || openBusy} onClick={() => onBuild()}>
+        {buildBusy ? <><span className="spinner" /> Building test...</> : "Build test"}
+      </button>
+    </section>
+
+    {test && <>
+      {test.warnings?.length > 0 && <div className="app-message app-message-success test-warning-list">
+        <AlertCircle size={16} />
+        <div><strong>Warnings</strong><ul>{test.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul></div>
+      </div>}
+      <section className="teacher-panel test-result-panel" ref={testResultRef}>
+        <div className="test-result-heading">
+          <div><h2>{test.title}</h2><p>{test.total_items} items · {test.lesson_names.join(", ")}</p></div>
+          {openBusy && <span className="teacher-loading"><span className="spinner" /> Opening...</span>}
+        </div>
+        <div className="test-tabs" role="tablist" aria-label="Test details">
+          {[
+            ["specification", "Table of Specifications"],
+            ["preview", "Preview"],
+            ["key", "Answer key"],
+            ["download", "Download"]
+          ].map(([value, label]) => <button
+            className={tab === value ? "test-tab-active" : ""}
+            type="button"
+            role="tab"
+            aria-selected={tab === value}
+            key={value}
+            onClick={() => setTab(value)}
+          >{label}</button>)}
+        </div>
+        {tab === "specification" && renderSpecification()}
+        {tab === "preview" && renderPreview()}
+        {tab === "key" && renderAnswerKey()}
+        {tab === "download" && <div className="test-download-panel">
+          <p>Download editable Word documents for both test sets, the answer key, the specification, or a CSV template for results.</p>
+          <div className="test-download-buttons">
+            <button className="button-outline" type="button" onClick={() => onDownload(test.id, "test", "A")}><Download size={14} /> Test paper – Set A</button>
+            {test.sets?.B && <button className="button-outline" type="button" onClick={() => onDownload(test.id, "test", "B")}><Download size={14} /> Test paper – Set B</button>}
+            <button className="button-outline" type="button" onClick={() => onDownload(test.id, "key")}><Download size={14} /> Answer key</button>
+            <button className="button-outline" type="button" onClick={() => onDownload(test.id, "tos")}><Download size={14} /> Table of Specifications</button>
+            <button className="button-outline" type="button" onClick={() => onDownloadTemplate(test.id)}><FileSpreadsheet size={14} /> Results template (CSV)</button>
+          </div>
+          <small>Word files open in Microsoft Word, WPS Office or Google Docs.</small>
+        </div>}
+      </section>
+    </>}
+
+    <section className="teacher-panel teacher-saved-tests">
+      <div className="section-heading">
+        <div><h2>Saved tests</h2><p>Open, rename, delete, or analyze an existing test.</p></div>
+        {testsBusy && <span className="teacher-loading"><span className="spinner" /> Loading...</span>}
+      </div>
+      {tests.length
+        ? <div className="saved-test-list">{tests.map((savedTest) => (
+          <article
+            className={`saved-test-row${test?.id === savedTest.id ? " saved-test-row-active" : ""}`}
+            key={savedTest.id}
+          >
+            {renamingTestId === savedTest.id
+              ? <div className="saved-test-rename">
+                <input value={renameValue} onChange={(event) => setRenameValue(event.target.value)} aria-label="Test title" />
+                <button className="button-outline" type="button" onClick={() => saveRename(savedTest)}>Save</button>
+                <button className="icon-button" type="button" aria-label="Cancel rename" onClick={() => setRenamingTestId(null)}><X size={14} /></button>
+              </div>
+              : <div className="saved-test-info">
+                <strong>{savedTest.title}</strong>
+                <small>{formatDate(savedTest.created_at)} · {savedTest.total_items} items · Sets {savedTest.sets.join(", ")} · {savedTest.students} students</small>
+              </div>}
+            {renamingTestId !== savedTest.id && <div className="saved-test-actions">
+              <button className="button-outline" type="button" onClick={() => onOpenTest(savedTest.id)}>Open</button>
+              <button className="icon-button" type="button" aria-label={`Rename ${savedTest.title}`} onClick={() => {
+                setRenamingTestId(savedTest.id);
+                setRenameValue(savedTest.title);
+              }}><Pencil size={14} /></button>
+              <button className="icon-button" type="button" aria-label={`Delete ${savedTest.title}`} onClick={() => onDeleteTest(savedTest)}><Trash2 size={14} /></button>
+              <button className="button-outline" type="button" onClick={() => onAnalyzeTest(savedTest.id)}>Analyze</button>
+            </div>}
+          </article>
+        ))}</div>
+        : !testsBusy && <p className="teacher-empty">No saved tests yet.</p>}
+    </section>
+  </section>;
+}
+
+function ItemAnalysisPage({
+  tests, testsBusy, selectedTestId, onSelectTest, analysis, analysisBusy, resultsBusy,
+  resultsInput, error, notice, onDownloadTemplate
+}) {
+  const [filter, setFilter] = useState("All");
+  const summary = analysis?.summary;
+  const visibleItems = (analysis?.items || []).filter(
+    (item) => filter === "All" || item.decision === filter
+  );
+  const students = [...(analysis?.students || [])].sort((left, right) => right.score - left.score);
+  const decisions = summary?.decisions || {};
+  const topicMax = Math.max(0, ...(analysis?.topics || []).map((topic) => topic.average_difficulty_index));
+
+  const renderSummary = (label, value, detail = "") => <div className="analysis-summary-card" key={label}>
+    <span>{label}</span>
+    <strong>{value}</strong>
+    {detail && <small>{detail}</small>}
+  </div>;
+
+  return <section className="teacher-page">
+    <div className="training-page-heading">
+      <div>
+        <div className="eyebrow"><span className="eyebrow-dot" /> TEACHER TOOLS</div>
+        <h1>Item Analysis</h1>
+        <p>Review class results, item quality, distractor performance, and test reliability.</p>
+      </div>
+    </div>
+    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
+    <section className="teacher-panel analysis-import-panel">
+      <label className="teacher-field">
+        <span>Saved test</span>
+        <select value={selectedTestId} onChange={(event) => onSelectTest(event.target.value)} disabled={testsBusy}>
+          <option value="">Select a saved test</option>
+          {tests.map((test) => <option value={test.id} key={test.id}>{test.title}</option>)}
+        </select>
+      </label>
+      <ol className="analysis-instructions">
+        <li>Download the results template.</li>
+        <li>Enter each student's answers (letters for multiple choice, T/F for true or false, the term for identification) and their set.</li>
+        <li>Import the CSV.</li>
+      </ol>
+      <div className="analysis-import-actions">
+        <button className="button-outline" type="button" disabled={!selectedTestId} onClick={() => onDownloadTemplate(selectedTestId)}>
+          <Download size={14} /> Download template
+        </button>
+        <button
+          className="button-dark"
+          type="button"
+          disabled={!selectedTestId || resultsBusy}
+          onClick={() => resultsInput.current?.click()}
+        >
+          {resultsBusy ? <><span className="spinner" /> Importing...</> : <><Upload size={14} /> Import results (CSV)</>}
+        </button>
+      </div>
+    </section>
+
+    {analysisBusy && <div className="teacher-loading analysis-loading"><span className="spinner" /> Loading item analysis...</div>}
+    {analysis?.warnings?.length > 0 && <div className="app-message app-message-success test-warning-list">
+      <AlertCircle size={16} />
+      <div><strong>Warnings</strong><ul>{analysis.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul></div>
+    </div>}
+    {summary && <div className="analysis-results">
+      <section className="teacher-panel">
+        <div className="section-heading"><div><h2>{analysis.title} · Summary</h2><p>{summary.items} items analyzed</p></div></div>
+        <div className="analysis-summary-grid">
+          {renderSummary("Students", summary.students)}
+          {renderSummary("Mean score", `${summary.mean_score} / ${summary.items}`, `${Number(summary.mean_percent).toFixed(1)}%`)}
+          {renderSummary("Median", summary.median_score)}
+          {renderSummary("Standard deviation", Number(summary.standard_deviation).toFixed(1))}
+          {renderSummary("Highest / lowest", `${summary.highest_score} / ${summary.lowest_score}`)}
+          {renderSummary("KR-20 reliability", summary.kr20 == null ? "—" : Number(summary.kr20).toFixed(2), summary.kr20 == null ? "" : summary.reliability)}
+          {renderSummary("Retain", decisions.Retain || 0)}
+          {renderSummary("Revise", decisions.Revise || 0)}
+          {renderSummary("Discard", decisions.Discard || 0)}
+        </div>
+      </section>
+
+      <section className="teacher-panel analysis-items-panel">
+        <div className="section-heading">
+          <div><h2>Item analysis</h2><p>Difficulty and discrimination indices with recommended decisions.</p></div>
+          <label className="analysis-filter">
+            <span>Decision</span>
+            <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+              {["All", "Retain", "Revise", "Discard"].map((value) => <option key={value}>{value}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="teacher-table-wrap"><table className="teacher-table analysis-item-table">
+          <thead><tr>
+            <th>No.</th><th>Question</th><th>Topic</th><th>Difficulty index</th><th>Discrimination index</th><th>Decision</th>
+          </tr></thead>
+          <tbody>{visibleItems.map((item) => <tr key={item.number}>
+            <td>{item.number}</td>
+            <td><details className="analysis-item-details">
+              <summary title={item.question_text}>{item.question_text}</summary>
+              <div className="analysis-item-expanded">
+                <p><strong>Full question:</strong> {item.question_text}</p>
+                <p><strong>Correct answer:</strong> {item.correct_answer}</p>
+                <p><strong>Correct:</strong> {item.correct_count} · <strong>Unanswered:</strong> {item.unanswered}</p>
+                {item.question_type === "Multiple Choice" && <div className="analysis-distractors">
+                  <strong>Distractor analysis</strong>
+                  <div className="teacher-table-wrap"><table className="teacher-table">
+                    <thead><tr><th>Option</th><th>Chosen by</th><th>Upper</th><th>Lower</th><th>Flag</th></tr></thead>
+                    <tbody>{(item.options || []).map((option, index) => <tr className={option.is_answer ? "analysis-correct-option" : ""} key={`${item.number}-${index}`}>
+                      <td>{option.choice}{option.is_answer ? " · Correct answer" : ""}</td>
+                      <td>{option.chosen_by}</td><td>{option.upper}</td><td>{option.lower}</td><td>{option.flag || "—"}</td>
+                    </tr>)}</tbody>
+                  </table></div>
+                </div>}
+              </div>
+            </details></td>
+            <td>{item.topic}</td>
+            <td>{Number(item.difficulty_index).toFixed(3)} <small>({item.difficulty})</small></td>
+            <td>{Number(item.discrimination_index).toFixed(3)} <small>({item.discrimination})</small></td>
+            <td><span className={`analysis-decision analysis-decision-${item.decision.toLowerCase()}`}>{item.decision}</span></td>
+          </tr>)}</tbody>
+        </table></div>
+        {!visibleItems.length && <p className="teacher-empty">No items match this decision filter.</p>}
+      </section>
+
+      <section className="teacher-panel">
+        <div className="section-heading"><div><h2>Topics</h2><p>Average difficulty, hardest first.</p></div></div>
+        <div className="analysis-topic-list">{analysis.topics.map((topic) => {
+          const value = Number(topic.average_difficulty_index) || 0;
+          return <div className="analysis-topic-row" key={topic.topic}>
+            <strong>{topic.topic}</strong>
+            <span className="analysis-topic-bar"><i style={{ width: `${topicMax ? value / topicMax * 100 : 0}%` }} /></span>
+            <small>{value.toFixed(3)}</small>
+          </div>;
+        })}</div>
+      </section>
+
+      <section className="teacher-panel">
+        <div className="section-heading"><div><h2>Students</h2><p>Sorted by score, highest first.</p></div></div>
+        <div className="teacher-table-wrap"><table className="teacher-table">
+          <thead><tr><th>Name</th><th>Set</th><th>Score</th></tr></thead>
+          <tbody>{students.map((student, index) => <tr key={`${student.name}-${student.set}-${index}`}>
+            <td>{student.name}</td><td>{student.set}</td><td>{student.score}</td>
+          </tr>)}</tbody>
+        </table></div>
+      </section>
+
+      <details className="test-method-details">
+        <summary>How is this calculated?</summary>
+        <p><strong>Difficulty index:</strong> {analysis.method.difficulty_index}</p>
+        <p><strong>Discrimination index:</strong> {analysis.method.discrimination_index}</p>
+        <p><strong>Decision:</strong> {analysis.method.decision}</p>
+        <p><strong>KR-20:</strong> {analysis.method.kr20}</p>
+      </details>
+    </div>}
+    {!analysisBusy && !analysis && !error && !selectedTestId && (
+      <p className="teacher-empty">Select a saved test to review its analysis.</p>
+    )}
+  </section>;
 }
 
 function SavedQuestionsPage({

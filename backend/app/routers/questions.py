@@ -48,6 +48,7 @@ def _compat_main():
     return importlib.import_module("app.main")
 from ..services.uploads import _is_exam_upload
 from app.progress import record_topic_likelihood
+from app.assessments import explanation_for
 
 router = APIRouter()
 
@@ -602,7 +603,7 @@ def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
             for question_id in request.question_ids
         },
         "explanations": {
-            question_id: questions[question_id]["support_excerpt"]
+            question_id: explanation_for(questions[question_id])
             for question_id in request.question_ids
         },
     }

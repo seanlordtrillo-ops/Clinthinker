@@ -35,6 +35,37 @@ async function apiRequest(path, options = {}) {
   return response.json();
 }
 
+async function apiDownload(path) {
+  let response;
+  try {
+    response = await fetch(`${API_ROOT}${path}`);
+  } catch (error) {
+    throw new Error(
+      `The local service is unavailable. Start the app's backend and try again. (${error.message})`
+    );
+  }
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try {
+      const body = await response.json();
+      message = formatApiError(body.detail, message);
+    } catch {
+      // Keep the HTTP status message if the server did not return JSON.
+    }
+    throw Object.assign(new Error(message), { status: response.status });
+  }
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const quotedName = disposition.match(/filename="([^"]+)"/i)?.[1];
+  const plainName = disposition.match(/filename=([^;\s]+)/i)?.[1];
+  return {
+    blob: await response.blob(),
+    filename: encodedName
+      ? decodeURIComponent(encodedName)
+      : quotedName || plainName || "download"
+  };
+}
+
 export const api = {
   health: () => apiRequest("/api/health"),
   startupUpdateCheck: () => {
@@ -108,6 +139,31 @@ export const api = {
   deleteSavedSession: (id) => apiRequest(`/api/questions/sessions/${encodeURIComponent(id)}`, {
     method: "DELETE"
   }),
+  buildTest: (payload) => apiRequest("/api/tests", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }),
+  tests: () => apiRequest("/api/tests"),
+  test: (id) => apiRequest(`/api/tests/${encodeURIComponent(id)}`),
+  renameTest: (id, title) => apiRequest(`/api/tests/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title })
+  }),
+  deleteTest: (id) => apiRequest(`/api/tests/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  importTestResults: (id, file) => {
+    const body = new FormData();
+    body.append("file", file);
+    return apiRequest(`/api/tests/${encodeURIComponent(id)}/results`, { method: "POST", body });
+  },
+  testAnalysis: (id) => apiRequest(`/api/tests/${encodeURIComponent(id)}/analysis`),
+  downloadTestExport: (id, document, setLabel = null) => {
+    const params = new URLSearchParams({ document });
+    if (setLabel) params.set("set_label", setLabel);
+    return apiDownload(`/api/tests/${encodeURIComponent(id)}/export?${params}`);
+  },
+  downloadTestResultsTemplate: (id) => apiDownload(`/api/tests/${encodeURIComponent(id)}/results-template`),
   latestAnalysis: () => apiRequest("/api/analysis/latest"),
   settings: () => apiRequest("/api/settings"),
   saveSettings: (settings) => apiRequest("/api/settings", {

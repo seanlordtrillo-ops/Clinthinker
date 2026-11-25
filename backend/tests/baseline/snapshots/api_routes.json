@@ -85,6 +85,42 @@
   },
   {
     "method": "get",
+    "path": "/api/tests"
+  },
+  {
+    "method": "post",
+    "path": "/api/tests"
+  },
+  {
+    "method": "delete",
+    "path": "/api/tests/{test_id}"
+  },
+  {
+    "method": "get",
+    "path": "/api/tests/{test_id}"
+  },
+  {
+    "method": "put",
+    "path": "/api/tests/{test_id}"
+  },
+  {
+    "method": "get",
+    "path": "/api/tests/{test_id}/analysis"
+  },
+  {
+    "method": "get",
+    "path": "/api/tests/{test_id}/export"
+  },
+  {
+    "method": "post",
+    "path": "/api/tests/{test_id}/results"
+  },
+  {
+    "method": "get",
+    "path": "/api/tests/{test_id}/results-template"
+  },
+  {
+    "method": "get",
     "path": "/api/training-datasets"
   },
   {

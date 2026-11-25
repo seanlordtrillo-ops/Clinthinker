@@ -1,4 +1,7 @@
-import { CircleHelp, Database, FileQuestion, FileUp, NotebookText, Settings2, ShieldCheck, TrendingUp } from "lucide-react";
+import {
+  BarChart3, CircleHelp, ClipboardList, Database, FileQuestion, FileUp, NotebookText,
+  Settings2, ShieldCheck, TrendingUp
+} from "lucide-react";
 import cmuLogoFull from "../assets/cmu-logo-full.png";
 import cmuLogoFullBlueText from "../assets/cmu-logo-full-blue-text (1).png";
 import cmuShield from "../assets/cmu-shield (2).png";
@@ -11,6 +14,10 @@ const items = [
   ["Training Data", Database],
   ["Settings", Settings2],
   ["Help", CircleHelp]
+];
+const teacherItems = [
+  ["Test Builder", ClipboardList],
+  ["Item Analysis", BarChart3]
 ];
 
 export default function Sidebar({ active, onNavigate, open, onClose }) {
@@ -29,6 +36,14 @@ export default function Sidebar({ active, onNavigate, open, onClose }) {
         <div className="workspace-label">WORKSPACE</div>
         <nav className="side-nav">
           {items.map(([label, Icon]) => (
+            <button key={label} className={`nav-item ${active === label ? "nav-active" : ""}`} onClick={() => onNavigate(label)}>
+              <Icon size={18} strokeWidth={1.8} />
+              <span>{label}</span>
+              {active === label && <span className="nav-pip" />}
+            </button>
+          ))}
+          <div className="workspace-label teacher-tools-label">TEACHER TOOLS</div>
+          {teacherItems.map(([label, Icon]) => (
             <button key={label} className={`nav-item ${active === label ? "nav-active" : ""}`} onClick={() => onNavigate(label)}>
               <Icon size={18} strokeWidth={1.8} />
               <span>{label}</span>

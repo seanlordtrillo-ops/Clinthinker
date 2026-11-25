@@ -17,6 +17,7 @@ from typing import Iterable, Mapping
 
 from fastapi import HTTPException
 
+from .assessments import explanation_for
 from .core.checks import checks
 from .database import connect
 
@@ -136,7 +137,7 @@ def _save_practice_item(db, question: Mapping, moment: datetime) -> None:
             question.get("difficulty") or "Moderate",
             json.dumps(list(question.get("choices") or [])),
             question["correct_answer"],
-            question.get("support_excerpt") or question.get("explanation") or "",
+            explanation_for(question),
             question.get("source_material_id"),
             question.get("source_material_name") or "",
             question.get("likelihood_score"),
@@ -211,7 +212,7 @@ def record_attempt(
         "correct": correct,
         "your_answer": chosen,
         "correct_answer": question["correct_answer"],
-        "explanation": question.get("support_excerpt") or question.get("explanation") or "",
+        "explanation": explanation_for(question),
         "topic": topic,
         "review_box": box,
         "next_review_at": _stamp(due_at),
@@ -238,7 +239,8 @@ def find_saved_question(question_id: str) -> dict | None:
     with connect() as db:
         row = db.execute(
             "SELECT id, question_text, question_type, topic, difficulty, choices, "
-            "correct_answer, support_excerpt, source_material_id, source_material_name "
+            "correct_answer, support_excerpt, source_material_id, source_material_name, "
+            "source_reference "
             "FROM generated_questions WHERE id=?",
             (question_id,),
         ).fetchone()

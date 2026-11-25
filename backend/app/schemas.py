@@ -110,3 +110,28 @@ class SubmitAnswerRequest(BaseModel):
     question_id: str = Field(min_length=1, max_length=120)
     answer: str = Field(min_length=1, max_length=500)
     generation_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class BuildTestRequest(BaseModel):
+    title: str = Field(default="", max_length=120)
+    training_dataset_id: str = Field(min_length=1, max_length=100)
+    lesson_upload_ids: list[str] = Field(min_length=1, max_length=10)
+    total_items: int = Field(default=30, ge=5, le=100)
+    question_types: list[Literal["Multiple Choice", "True or False", "Identification"]] = Field(
+        default_factory=lambda: ["Multiple Choice"], min_length=1, max_length=3
+    )
+    items_per_topic: dict[str, int] | None = None
+    include_set_b: bool = True
+
+    @model_validator(mode="after")
+    def topic_counts_must_be_reasonable(self):
+        if self.items_per_topic is not None:
+            if any(count < 0 or count > 100 for count in self.items_per_topic.values()):
+                raise ValueError("Each topic needs between 0 and 100 items.")
+            if not 1 <= sum(self.items_per_topic.values()) <= 100:
+                raise ValueError("The test needs between 1 and 100 items in total.")
+        return self
+
+
+class RenameTestRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)

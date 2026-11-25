@@ -87,6 +87,7 @@ from .routers.predictions import router as predictions_router
 from .routers.questions import router as questions_router
 from .routers.settings import router as settings_router
 from .routers.progress import router as progress_router
+from .routers.assessments import router as assessments_router
 
 app.router.routes.extend(system_router.routes)
 app.router.routes.extend(updates_router.routes)
@@ -96,6 +97,7 @@ app.router.routes.extend(predictions_router.routes)
 app.router.routes.extend(questions_router.routes)
 app.router.routes.extend(settings_router.routes)
 app.router.routes.extend(progress_router.routes)
+app.router.routes.extend(assessments_router.routes)
 
 if WEB_DIR.exists():
     app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="frontend")
@@ -146,6 +148,15 @@ from .routers.progress import submit_answer as submit_answer
 from .routers.progress import read_progress as read_progress
 from .routers.progress import clear_progress as clear_progress
 from .routers.progress import read_due_reviews as read_due_reviews
+from .routers.assessments import build_test as build_test
+from .routers.assessments import list_tests as list_tests
+from .routers.assessments import read_test as read_test
+from .routers.assessments import rename_test as rename_test
+from .routers.assessments import delete_test as delete_test
+from .routers.assessments import export_test as export_test
+from .routers.assessments import results_template as results_template
+from .routers.assessments import import_results as import_results
+from .routers.assessments import read_analysis as read_analysis
 from .routers.questions import _question_batches as _question_batches
 from .routers.questions import _MAX_QUESTION_BATCHES as _MAX_QUESTION_BATCHES
 from .routers.questions import _QUESTION_BATCH_UNAVAILABLE_DETAIL as _QUESTION_BATCH_UNAVAILABLE_DETAIL
