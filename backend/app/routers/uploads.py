@@ -98,12 +98,16 @@ async def _receive_upload(file: UploadFile, deduplicate: bool = False) -> dict:
     return await run_in_threadpool(_store_upload, name, content, deduplicate)
 
 
+@router.post("/api/upload")
+async def upload_material(file: UploadFile = File(...)) -> dict:
+    return await _upload_material(file)
+
+
 @checks(
     expected="Uploaded file metadata",
     probable_cause="Upload parsing or storage failed",
 )
-@router.post("/api/upload")
-async def upload_material(file: UploadFile = File(...)) -> dict:
+async def _upload_material(file: UploadFile = File(...)) -> dict:
     return await _receive_upload(file)
 
 

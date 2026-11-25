@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import cmuShieldImage from "./assets/cmu-shield (2).png";
 import Sidebar from "./components/Sidebar.jsx";
-import { api } from "./lib/api.js";
+import { api, SAFETY_BLOCKED_MESSAGE } from "./lib/api.js";
 
 const initialSettings = { appearance: "orange" };
 const initialQuestionForm = {
@@ -19,6 +19,15 @@ const initialQuestionForm = {
   allow_repeats: false,
   weights: { historical_frequency: 40, course_importance: 30, model_confidence: 20, recent_occurrence: 10 }
 };
+
+function AppErrorMessage({ message }) {
+  return <div className="app-message app-message-error">
+    <AlertCircle size={16} />
+    {message === SAFETY_BLOCKED_MESSAGE
+      ? <>This request was blocked for safety. Open Clinthinker from its own window or from <a href="http://localhost:5173">http://localhost:5173</a>.</>
+      : message}
+  </div>;
+}
 
 export default function App() {
   const [page, setPage] = useState("Upload");
@@ -33,10 +42,19 @@ export default function App() {
   const [trainingBusy, setTrainingBusy] = useState(false);
   const [queuedFiles, setQueuedFiles] = useState([]);
   const [latest, setLatest] = useState(null);
+  const [latestSourceUploadIds, setLatestSourceUploadIds] = useState([]);
   const [progress, setProgress] = useState([]);
   const [busy, setBusy] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setErrorState] = useState("");
+  const setError = (nextError) => {
+    setErrorState((current) => {
+      const message = typeof nextError === "function" ? nextError(current) : nextError;
+      return typeof message === "string" && message.includes(SAFETY_BLOCKED_MESSAGE)
+        ? SAFETY_BLOCKED_MESSAGE
+        : message;
+    });
+  };
   const [notice, setNotice] = useState("");
   const [appVersion, setAppVersion] = useState("");
   const [updateOffer, setUpdateOffer] = useState(null);
@@ -256,8 +274,13 @@ export default function App() {
         });
         syncSavedUploads(savedUploads);
         const savedQuestionSettings = savedSettings.question_generation;
+        const preferredDatasetId = savedQuestionSettings?.training_dataset_id || "builtin";
+        const resolvedDatasetId = savedDatasets.some((dataset) => dataset.id === preferredDatasetId)
+          ? preferredDatasetId
+          : savedDatasets.find((dataset) => dataset.id !== "builtin")?.id || "builtin";
+        setQuestionDatasetId(resolvedDatasetId);
+        setSelectedDatasetId(resolvedDatasetId);
         if (savedQuestionSettings) {
-          setQuestionDatasetId(savedQuestionSettings.training_dataset_id || "builtin");
           setQuestionForm({
             ...initialQuestionForm,
             ...savedQuestionSettings,
@@ -290,10 +313,6 @@ export default function App() {
         }
         setLatest(savedAnalysis);
         setDatasets(savedDatasets);
-        if (savedAnalysis?.training_dataset_id
-            && savedDatasets.some((dataset) => dataset.id === savedAnalysis.training_dataset_id)) {
-          setSelectedDatasetId(savedAnalysis.training_dataset_id);
-        }
       })
       .catch((loadError) => {
         if (active) setError(loadError.message);
@@ -706,8 +725,12 @@ export default function App() {
           (queued) => queued.id === item.id ? savedItem : queued
         ));
       }
-      syncSavedUploads(await api.uploads());
+      const savedUploads = await api.uploads();
+      syncSavedUploads(savedUploads);
       setQueuedFiles(materials);
+      const analyzedUploadIds = materials
+        .map((item) => item.savedId || item.id)
+        .filter((id) => savedUploads.some((upload) => upload.id === id));
       const text = materials.map((item) => item.text).filter(Boolean).join("\n\n");
       if (!text.trim()) throw new Error("No readable text was found in the selected files.");
       const result = await api.predict({ text, training_dataset_id: selectedDatasetId }, (event) => {
@@ -730,6 +753,7 @@ export default function App() {
         });
       });
       setLatest(result);
+      setLatestSourceUploadIds(analyzedUploadIds);
       setProgress((current) => current.map((item) => ({ ...item, state: "done" })));
       setNotice("Analysis finished. Your result is saved on this device.");
     } catch (analysisError) {
@@ -830,7 +854,8 @@ export default function App() {
   const generateQuestions = async ({
     lessons: lessonOverride = lessonUploads,
     useStyle = useExamStyle,
-    topic = "All Topics"
+    topic = "All Topics",
+    trainingDatasetId = questionDatasetId
   } = {}) => {
     setError("");
     setNotice("");
@@ -860,7 +885,7 @@ export default function App() {
     setQuestionsSaved(false);
     try {
       const result = await api.generateQuestions({
-        training_dataset_id: questionDatasetId,
+        training_dataset_id: trainingDatasetId,
         upload_ids: uploadIds,
         lesson_upload_id: useLesson && selectedLessons.length === 1
           ? selectedLessons[0].id
@@ -928,6 +953,56 @@ export default function App() {
     setQuestionExplanations({});
     setQuestionsSaved(false);
     void generateQuestions({ topic });
+  };
+
+  const practiceAnalyzedTopic = (topic) => {
+    const analyzedLessons = latestSourceUploadIds
+      .map((id) => uploads.find((upload) => upload.id === id))
+      .filter(Boolean)
+      .map((upload) => ({ ...upload, status: "Ready" }));
+    if (!analyzedLessons.length) {
+      setError("The files used for this analysis are no longer available.");
+      return;
+    }
+    const datasetId = latest?.training_dataset_id || selectedDatasetId;
+    setQuestionDatasetId(datasetId);
+    setQuestionUploadIds(analyzedLessons.map((lesson) => lesson.id));
+    setLessonUploads(analyzedLessons);
+    setPage("Generate Practice Questions");
+    setMenuOpen(false);
+    setQuestionResult(null);
+    setQuestionAnswers({});
+    setQuestionExplanations({});
+    setQuestionAttemptResults({});
+    setSelectedQuestionAnswers({});
+    setQuestionsSaved(false);
+    void generateQuestions({
+      lessons: analyzedLessons,
+      topic,
+      trainingDatasetId: datasetId
+    });
+  };
+
+  const buildTestFromAnalyzedFiles = () => {
+    const analyzedUploads = latestSourceUploadIds
+      .map((id) => uploads.find((upload) => upload.id === id))
+      .filter(Boolean);
+    if (!analyzedUploads.length) {
+      setError("The files used for this analysis are no longer available.");
+      return;
+    }
+    const datasetId = latest?.training_dataset_id || selectedDatasetId;
+    setTestTitle(analyzedUploads
+      .map((upload) => upload.name.replace(/\.[^.]+$/, ""))
+      .join(" & ")
+      .slice(0, 120));
+    setTestLessonUploadIds(analyzedUploads.map((upload) => upload.id));
+    setTestDatasetId(datasetId);
+    setBuiltTest(null);
+    setError("");
+    setNotice("");
+    setPage("Test Builder");
+    setMenuOpen(false);
   };
 
   const buildTeacherTest = async (itemsPerTopic = null) => {
@@ -1475,6 +1550,9 @@ export default function App() {
           datasets={datasets}
           selectedDatasetId={selectedDatasetId}
           setSelectedDatasetId={setSelectedDatasetId}
+          showBuiltInWarning={
+            selectedDatasetId === "builtin" && datasets.some((dataset) => dataset.id !== "builtin")
+          }
           trainingBusy={trainingBusy}
           queuedFiles={queuedFiles}
           addFiles={addFiles}
@@ -1487,6 +1565,8 @@ export default function App() {
           busy={busy}
           progress={progress}
           latest={latest}
+          onPracticeTopic={practiceAnalyzedTopic}
+          onBuildTestFromFiles={buildTestFromAnalyzedFiles}
           error={error}
           notice={notice}
           dragging={dragging}
@@ -1913,7 +1993,7 @@ function PracticeQuestionsPage({
       preferences={preferences}
       onReset={onResetPreferences}
     />}
-    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {error && <AppErrorMessage message={error} />}
     {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
     {selectedTopic && <div className="practice-topic-filter">
       <span>Topic: {selectedTopic}</span>
@@ -2202,7 +2282,7 @@ function MyProgressPage({
         <p>Track answers, build mastery, and revisit questions on a spaced schedule.</p>
       </div>
     </div>
-    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {error && <AppErrorMessage message={error} />}
     {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
     {busy && !data && <div className="training-empty">Loading your progress...</div>}
     {!busy && data && topics.length === 0 ? <div className="progress-empty">
@@ -2538,7 +2618,7 @@ function TestBuilderPage({
         <p>Assemble balanced tests and export student papers, keys, and specifications.</p>
       </div>
     </div>
-    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {error && <AppErrorMessage message={error} />}
     {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
 
     <section className="teacher-panel test-builder-form">
@@ -2713,7 +2793,7 @@ function ItemAnalysisPage({
         <p>Review class results, item quality, distractor performance, and test reliability.</p>
       </div>
     </div>
-    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {error && <AppErrorMessage message={error} />}
     {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
     <section className="teacher-panel analysis-import-panel">
       <label className="teacher-field">
@@ -2881,7 +2961,7 @@ function SavedQuestionsPage({
       PDF exports include an answer key only while that session's answers are shown.
     </p>
 
-    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {error && <AppErrorMessage message={error} />}
     {busy && !sessions.length
       ? <div className="output-empty"><span className="spinner" /><strong>Loading saved questions...</strong></div>
       : sessions.length
@@ -3073,9 +3153,9 @@ function QuestionFeedbackButtons({ item, onRate }) {
 }
 
 function UploadPage({
-  uploads, datasets, selectedDatasetId, setSelectedDatasetId, trainingBusy, queuedFiles,
+  uploads, datasets, selectedDatasetId, setSelectedDatasetId, showBuiltInWarning, trainingBusy, queuedFiles,
   addFiles, fileInput, removeQueued, includeSavedFile, removeUpload, setUploadExam, analyze,
-  busy, progress, latest, error, notice, dragging
+  busy, progress, latest, onPracticeTopic, onBuildTestFromFiles, error, notice, dragging
 }) {
   return (
     <section className="upload-page">
@@ -3115,6 +3195,10 @@ function UploadPage({
                 </option>)}
               </select>
             </label>
+            {showBuiltInWarning && <div className="app-message app-message-success dataset-guidance">
+              <AlertCircle size={14} />
+              <span>Built-in examples only cover 8 general computing topics. Choose your course dataset for accurate topics.</span>
+            </div>}
             <div className="ensemble-note"><BrainCircuit size={15} /><span><strong>Combined prediction</strong><small>TF-IDF features are analyzed by SVM and Naive Bayes together.</small></span></div>
             <button className="button-dark analyze-button" disabled={busy || trainingBusy || !queuedFiles.length} onClick={analyze}>
               {busy ? <><span className="spinner" /> Analyzing materials...</> : <><BrainCircuit size={16} /> Analyze materials</>}
@@ -3151,9 +3235,13 @@ function UploadPage({
 
         <div className="upload-results">
           {(busy || progress.length > 0) && <ProgressPanel progress={progress} busy={busy} />}
-          {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+          {error && <AppErrorMessage message={error} />}
           {notice && !error && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
-          <AnalysisOutput analysis={latest} />
+          <AnalysisOutput
+            analysis={latest}
+            onPracticeTopic={onPracticeTopic}
+            onBuildTestFromFiles={onBuildTestFromFiles}
+          />
         </div>
       </div>
     </section>
@@ -3175,7 +3263,7 @@ function ProgressPanel({ progress, busy }) {
   </div>;
 }
 
-function AnalysisOutput({ analysis }) {
+function AnalysisOutput({ analysis, onPracticeTopic, onBuildTestFromFiles }) {
   return <section className="analysis-output">
     <div className="section-heading"><div><h2>Topic predictions</h2><p>Most likely topics based on the analyzed material</p></div>
       {analysis && <span className="output-method">{analysis.method || "TF-IDF + SVM + Naive Bayes ensemble"}</span>}
@@ -3187,8 +3275,19 @@ function AnalysisOutput({ analysis }) {
           <span className="prediction-rank">{String(index + 1).padStart(2, "0")}</span>
           <span className="prediction-topic"><strong>{prediction.topic}</strong><span><i style={{ width: `${Math.max(0, Math.min(100, prediction.confidence * 100))}%` }} /></span></span>
           <strong className="prediction-confidence">{Math.round(prediction.confidence * 100)}%</strong>
+          <button
+            className="button-outline prediction-practice-button"
+            type="button"
+            aria-label={`Practice ${prediction.topic}`}
+            onClick={() => onPracticeTopic(prediction.topic)}
+          >Practice</button>
         </div>)}</div>
         <p className="output-disclaimer">Training data: {analysis.training_dataset_name || "Built-in examples"}. SVM and Naive Bayes scores are averaged equally over shared TF-IDF features.</p>
+        <button
+          className="button-outline analysis-build-test-button"
+          type="button"
+          onClick={onBuildTestFromFiles}
+        >Build a test from these files</button>
       </div>}
   </section>;
 }
@@ -3338,7 +3437,7 @@ function TrainingDataPage({
       </div>
     </div>
     </div>
-    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {error && <AppErrorMessage message={error} />}
     {notice && !error && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
   </section>;
 }
@@ -3458,7 +3557,7 @@ function SettingsPage({
     <button className="button-dark settings-save" onClick={saveSettings} disabled={busy || weightTotal !== 100}>
       {busy ? "Saving..." : "Save settings"}
     </button>
-    {error && <div className="app-message app-message-error"><AlertCircle size={16} />{error}</div>}
+    {error && <AppErrorMessage message={error} />}
     {notice && !error && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
     <div className="offline-note"><ShieldCheck size={17} /><span><strong>Offline by design</strong><small>Clinthinker© runs the prediction service and stores data on this computer. No cloud account or external data service is used.</small></span></div>
   </section>;

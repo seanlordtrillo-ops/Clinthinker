@@ -642,7 +642,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .app-message { display: flex; align-items: flex-start; gap: 8px; margin-top: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 10px; line-height: 1.5; }
 .app-message svg { flex: 0 0 auto; margin-top: 1px; }
 .app-message-error { border-color: rgba(255, 118, 98, .35); color: #ffad9f; background: rgba(255, 118, 98, .06); }
+.app-message-error a { color: inherit; font-weight: 650; text-decoration: underline; overflow-wrap: anywhere; }
 .app-message-success { border-color: rgba(var(--accent-rgb), .22); color: var(--orange-bright); background: rgba(var(--accent-rgb), .05); }
+.dataset-guidance { margin-top: 8px; padding: 8px 10px; font-size: 9px; }
 .analysis-output { margin-top: 22px; }
 .analysis-output > .section-heading { margin-bottom: 10px; }
 .output-method { padding: 5px 8px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); font-size: 8px; }
@@ -668,7 +670,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .prediction-topic > span { overflow: hidden; height: 3px; border-radius: 3px; background: rgba(255, 255, 255, .06); }
 .prediction-topic i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--orange), var(--orange-bright)); box-shadow: 0 0 9px rgba(var(--accent-rgb), .4); }
 .prediction-confidence { width: 38px; color: var(--text-soft); font-size: 9px; text-align: right; }
+.prediction-practice-button { flex: 0 0 auto; min-height: 28px; padding: 0 8px; font-size: 8px; }
 .output-disclaimer { margin: 0 -16px; padding: 10px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8px; line-height: 1.5; }
+.analysis-build-test-button { margin: 0 0 12px; min-height: 31px; font-size: 9px; }
 
 .progress-page { flex: 1; width: 100%; max-width: 1010px; align-self: center; overflow-y: auto; padding: 30px 32px 35px; }
 .progress-page .training-page-heading { margin-bottom: 18px; }
@@ -839,6 +843,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .saved-materials { min-height: 160px; }
   .saved-file-list { max-height: 210px; }
   .progress-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 10px; }
+  .prediction-row { gap: 6px; }
+  .prediction-rank { width: 15px; }
+  .prediction-confidence { width: 32px; }
+  .prediction-practice-button { min-height: 26px; padding: 0 6px; }
   .simple-page { padding: 26px 17px; }
 }
 

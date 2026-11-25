@@ -44,13 +44,12 @@ def choose_storage_directory(
     if data_root is None:
         raise ValueError("A data root is required when no storage directory is configured.")
 
-    storage_dir = data_root / "Topic Prediction Assistant" / "storage"
     renamed_storage = data_root / APP_NAME / "storage"
+    # Move data from the app's old name once; everything else (including a fresh
+    # install) uses the current folder, so new data never lands in the old one.
     if not renamed_storage_exists and legacy_storage_exists:
         return renamed_storage, True
-    if renamed_storage_exists:
-        return renamed_storage, False
-    return storage_dir, False
+    return renamed_storage, False
 
 
 def _resolve_storage_directory() -> Path:

@@ -38,7 +38,7 @@ def test_configured_environment_directory_skips_legacy_selection(tmp_path, monke
     assert not migrate_storage
 
 
-def test_unset_environment_uses_existing_default_location(tmp_path, monkeypatch):
+def test_fresh_install_uses_current_app_folder(tmp_path, monkeypatch):
     desktop_app = _load_desktop_app()
     monkeypatch.delenv("TOPIC_ASSISTANT_DATA_DIR", raising=False)
 
@@ -47,7 +47,7 @@ def test_unset_environment_uses_existing_default_location(tmp_path, monkeypatch)
         tmp_path,
     )
 
-    assert storage_dir == tmp_path / "Topic Prediction Assistant" / "storage"
+    assert storage_dir == tmp_path / desktop_app.APP_NAME / "storage"
     assert not migrate_storage
 
 
@@ -105,7 +105,7 @@ def test_fresh_install_creates_storage_before_logging(tmp_path, monkeypatch):
     monkeypatch.delenv("TOPIC_ASSISTANT_DATA_DIR", raising=False)
 
     storage_dir = desktop_app._resolve_storage_directory()
-    assert storage_dir == local_app_data / "Topic Prediction Assistant" / "storage"
+    assert storage_dir == local_app_data / desktop_app.APP_NAME / "storage"
     assert storage_dir.is_dir()
     assert not (storage_dir / "clinthinker.log").exists()
 

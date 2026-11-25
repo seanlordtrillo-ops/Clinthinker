@@ -69,12 +69,16 @@ _QUESTION_BATCH_UNAVAILABLE_DETAIL = (
 )
 
 
+@router.post("/api/questions/generate")
+def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
+    return _generate_practice_questions(request)
+
+
 @checks(
     expected="Generated question result",
     probable_cause="Question generation failed",
 )
-@router.post("/api/questions/generate")
-def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
+def _generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
     if len(set(request.upload_ids)) != len(request.upload_ids):
         raise HTTPException(status_code=422, detail="Select each course material only once.")
     if len(set(request.lesson_upload_ids)) != len(request.lesson_upload_ids):
@@ -328,7 +332,9 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
         training_metrics = {}
         classifier_examples = examples
         exam_passages_added = 0
-        if lesson_ids:
+        # Past exams only shape topic classification when the user turned the
+        # past-exam option on; otherwise the lessons are judged on the dataset alone.
+        if lesson_ids and request.use_exam_style:
             classifier_examples, exam_passages_added = (
                 _compat_main().augment_training_examples_with_exam_passages(
                     examples,
@@ -553,12 +559,16 @@ def clear_question_feedback() -> dict:
     return get_question_preferences()
 
 
+@router.post("/api/questions/history/reset")
+def reset_question_history(request: ResetQuestionHistoryRequest) -> dict:
+    return _reset_question_history(request)
+
+
 @checks(
     expected="Question history reset",
     probable_cause="Question history could not be reset",
 )
-@router.post("/api/questions/history/reset")
-def reset_question_history(request: ResetQuestionHistoryRequest) -> dict:
+def _reset_question_history(request: ResetQuestionHistoryRequest) -> dict:
     if len(set(request.upload_ids)) != len(request.upload_ids):
         raise HTTPException(status_code=422, detail="Select each lesson only once.")
     source_ids = set(request.upload_ids)
@@ -609,12 +619,16 @@ def reveal_question_answers(request: SaveQuestionsRequest) -> dict:
     }
 
 
+@router.post("/api/questions/save")
+def save_practice_questions(request: SaveQuestionsRequest) -> dict:
+    return _save_practice_questions(request)
+
+
 @checks(
     expected="Saved question result",
     probable_cause="Question saving failed",
 )
-@router.post("/api/questions/save")
-def save_practice_questions(request: SaveQuestionsRequest) -> dict:
+def _save_practice_questions(request: SaveQuestionsRequest) -> dict:
     batch = _question_batches.get(request.generation_id)
     if not batch:
         raise HTTPException(

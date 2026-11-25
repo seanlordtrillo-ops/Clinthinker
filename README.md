@@ -40,7 +40,7 @@ folder. The outputs are:
 
 ```text
 release\Clinthinker©\Clinthinker©.exe
-release\Clinthinker-Setup-2.0.5.exe
+release\Clinthinker-Setup-2.0.6.exe
 ```
 
 Keep the entire generated app folder together when moving or sharing it,

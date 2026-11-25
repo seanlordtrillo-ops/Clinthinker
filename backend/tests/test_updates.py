@@ -19,7 +19,7 @@ from app import database, main
 class UpdateTests(unittest.TestCase):
     installer_url = (
         "https://github.com/seanlordtrillo-ops/Clinthinker/"
-        "releases/download/v2.0.6/Clinthinker-Setup-2.0.6.exe"
+        "releases/download/v2.0.7/Clinthinker-Setup-2.0.7.exe"
     )
 
     def setUp(self):
@@ -49,7 +49,7 @@ class UpdateTests(unittest.TestCase):
             (project_root / "frontend" / "package-lock.json").read_text(encoding="utf-8")
         )
 
-        self.assertEqual(main.APP_VERSION, "2.0.5")
+        self.assertEqual(main.APP_VERSION, "2.0.6")
         self.assertEqual(manifest["version"], main.APP_VERSION)
         self.assertEqual(frontend_package["version"], main.APP_VERSION)
         self.assertEqual(frontend_lock["version"], main.APP_VERSION)
@@ -134,12 +134,12 @@ class UpdateTests(unittest.TestCase):
             )
         installer_bytes = b"installer package"
         manifest = {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": self.installer_url,
             "sha256": hashlib.sha256(installer_bytes).hexdigest(),
         }
         release = {
-            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.6.exe"}]
+            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.7.exe"}]
         }
         with (
             patch(
@@ -166,7 +166,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(
             release_request.full_url,
             "https://api.github.com/repos/seanlordtrillo-ops/Clinthinker/"
-            "releases/tags/v2.0.6",
+            "releases/tags/v2.0.7",
         )
         asset_request = open_url.call_args_list[2].args[0]
         self.assertIsInstance(asset_request, Request)
@@ -239,7 +239,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(
             launch.call_args.args[0],
             [
-                str(Path(self.temporary.name) / "clinthinker-updates" / "Clinthinker-Setup-2.0.6.exe"),
+                str(Path(self.temporary.name) / "clinthinker-updates" / "Clinthinker-Setup-2.0.7.exe"),
                 "/SILENT",
                 "/NORESTART",
             ],
@@ -342,12 +342,12 @@ class UpdateTests(unittest.TestCase):
 
         installer_bytes = b"installer package"
         manifest = {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": self.installer_url,
             "sha256": hashlib.sha256(installer_bytes).hexdigest(),
         }
         release = {
-            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.6.exe"}]
+            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.7.exe"}]
         }
         with (
             patch(
@@ -380,12 +380,12 @@ class UpdateTests(unittest.TestCase):
     def test_pruning_error_does_not_stop_update(self):
         installer_bytes = b"installer package"
         manifest = {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": self.installer_url,
             "sha256": hashlib.sha256(installer_bytes).hexdigest(),
         }
         release = {
-            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.6.exe"}]
+            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.7.exe"}]
         }
         for index in range(6):
             (database.STORAGE / f"assistant-old-{index}.sqlite3").write_bytes(
@@ -416,7 +416,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_install_rejects_missing_checksum_before_download(self):
         manifest = {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": self.installer_url,
         }
         with (
@@ -436,7 +436,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_install_rejects_invalid_checksum_before_download(self):
         manifest = {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": self.installer_url,
             "sha256": "not-a-checksum",
         }
@@ -457,7 +457,7 @@ class UpdateTests(unittest.TestCase):
 
     def test_install_rejects_non_github_manifest_url(self):
         manifest = {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": "https://github.com.attacker.test/setup.exe",
         }
         with patch(
@@ -532,12 +532,12 @@ class UpdateTests(unittest.TestCase):
     def test_install_refuses_checksum_mismatch_before_backup_or_launch(self):
         database.DB_PATH.write_bytes(b"local database")
         manifest = {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": self.installer_url,
             "sha256": "0" * 64,
         }
         release = {
-            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.6.exe"}]
+            "assets": [{"id": 12345, "name": "Clinthinker-Setup-2.0.7.exe"}]
         }
         with patch(
             "app.main.urllib.request.urlopen",
@@ -600,7 +600,7 @@ class UpdateTests(unittest.TestCase):
         ))
         self.assertFalse(main._valid_installer_url(
             "https://github.com/seanlordtrillo-ops/Clinthinker/releases/download/"
-            "v2.0.6/nested/installer.exe"
+            "v2.0.7/nested/installer.exe"
         ))
 
     def _update_stage_events(self, captured):
@@ -612,7 +612,7 @@ class UpdateTests(unittest.TestCase):
 
     def _valid_install_manifest(self, installer_bytes=b"installer package", checksum=None):
         return {
-            "version": "2.0.6",
+            "version": "2.0.7",
             "installer_url": self.installer_url,
             "sha256": checksum or hashlib.sha256(installer_bytes).hexdigest(),
         }
@@ -825,7 +825,7 @@ class UpdateTests(unittest.TestCase):
             (
                 "validate update info",
                 [patch.object(main, "_fetch_update_manifest", return_value={
-                    "version": "2.0.6",
+                    "version": "2.0.7",
                     "installer_url": self.installer_url,
                 })],
                 {"X-Clinthinker-Request": "1"},

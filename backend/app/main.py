@@ -21,6 +21,7 @@ from . import database
 from .database import UPLOADS, connect, get_settings, initialize, save_settings
 from .core import logging_setup as _core_logging_setup
 from .core.checks import checks
+from .core.security import LocalRequestGuard
 
 from .schemas import (
     DocumentDatasetRequest, EvaluateDatasetRequest, GenerateQuestionsRequest,
@@ -50,7 +51,7 @@ from .questions import (
 )
 
 APP_NAME = "Clinthinker©"
-APP_VERSION = "2.0.5"
+APP_VERSION = "2.0.6"
 _logging_setup_complete = False
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 app.add_middleware(
@@ -60,6 +61,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
 )
+# Added last so it runs first: refuse other websites and unknown host names.
+app.add_middleware(LocalRequestGuard)
 
 _bundled_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
 WEB_DIR = Path(
@@ -104,6 +107,9 @@ if WEB_DIR.exists():
 
 
 # Compatibility exports for existing imports and patches.
+# The HTTP routes log errors through @checks on their implementations; the checked
+# wrappers at the bottom of this file call the unlogged versions, so each error is
+# logged once either way.
 from .routers.system import health as health
 from .routers.system import diagnostics as diagnostics
 from .routers.system import database_recent_question_topics as database_recent_question_topics
@@ -177,7 +183,8 @@ def _analyze(request: PredictionRequest, progress_callback=None) -> dict:
 )
 def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
     from .routers import questions as questions_module
-    return questions_module.generate_practice_questions(request)
+    # Call the unlogged implementation so an error is logged once, here.
+    return questions_module._generate_practice_questions.__wrapped__(request)
 
 
 @checks(
@@ -186,7 +193,7 @@ def generate_practice_questions(request: GenerateQuestionsRequest) -> dict:
 )
 def save_practice_questions(request: SaveQuestionsRequest) -> dict:
     from .routers import questions as questions_module
-    return questions_module.save_practice_questions(request)
+    return questions_module._save_practice_questions.__wrapped__(request)
 
 
 @checks(
@@ -195,4 +202,4 @@ def save_practice_questions(request: SaveQuestionsRequest) -> dict:
 )
 async def upload_material(file: UploadFile = File(...)) -> dict:
     from .routers import uploads as uploads_module
-    return await uploads_module.upload_material(file)
+    return await uploads_module._upload_material.__wrapped__(file)

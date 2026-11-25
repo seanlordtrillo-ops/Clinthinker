@@ -56,7 +56,7 @@ from app import main as _main
 
 router = APIRouter()
 
-APP_VERSION = "2.0.5"
+APP_VERSION = "2.0.6"
 
 
 @router.get("/api/updates/check")

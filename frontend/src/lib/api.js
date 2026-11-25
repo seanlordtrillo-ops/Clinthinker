@@ -1,5 +1,13 @@
 const API_ROOT = window.location.origin;
 let startupUpdateCheck;
+export const SAFETY_BLOCKED_MESSAGE =
+  "This request was blocked for safety. Open Clinthinker from its own window or from http://localhost:5173.";
+
+function normalizeSafetyError(message, status) {
+  return [400, 403].includes(status) && /other websites|unknown address/i.test(message)
+    ? SAFETY_BLOCKED_MESSAGE
+    : message;
+}
 
 export function formatApiError(detail, fallback) {
   if (typeof detail === "string") return detail;
@@ -30,7 +38,10 @@ async function apiRequest(path, options = {}) {
     } catch {
       // Keep the HTTP status message if the server did not return JSON.
     }
-    throw Object.assign(new Error(message), { status: response.status });
+    throw Object.assign(
+      new Error(normalizeSafetyError(message, response.status)),
+      { status: response.status }
+    );
   }
   return response.json();
 }
@@ -52,7 +63,10 @@ async function apiDownload(path) {
     } catch {
       // Keep the HTTP status message if the server did not return JSON.
     }
-    throw Object.assign(new Error(message), { status: response.status });
+    throw Object.assign(
+      new Error(normalizeSafetyError(message, response.status)),
+      { status: response.status }
+    );
   }
   const disposition = response.headers.get("Content-Disposition") || "";
   const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
@@ -213,7 +227,11 @@ export const api = {
     }
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new Error(formatApiError(body.detail, `Prediction failed (${response.status})`));
+      const message = formatApiError(body.detail, `Prediction failed (${response.status})`);
+      throw Object.assign(
+        new Error(normalizeSafetyError(message, response.status)),
+        { status: response.status }
+      );
     }
     if (!response.body) throw new Error("The local service did not provide prediction progress.");
     const reader = response.body.getReader();
@@ -231,7 +249,14 @@ export const api = {
         if (!event || !data) continue;
         const parsed = JSON.parse(data);
         if (event === "progress") onProgress(parsed);
-        if (event === "error") throw new Error(parsed.detail || "Prediction failed.");
+        if (event === "error") {
+          const status = Number(parsed.status || parsed.status_code) || null;
+          const message = normalizeSafetyError(
+            parsed.detail || "Prediction failed.",
+            status
+          );
+          throw Object.assign(new Error(message), status ? { status } : {});
+        }
         if (event === "result") result = parsed;
       }
       if (done) break;
