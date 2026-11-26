@@ -250,6 +250,84 @@
     "foreign_keys": [],
     "sql": "CREATE TABLE attempts (\n                id TEXT PRIMARY KEY,\n                question_id TEXT NOT NULL,\n                topic TEXT NOT NULL,\n                source_material_id TEXT,\n                chosen_answer TEXT NOT NULL,\n                correct INTEGER NOT NULL CHECK(correct IN (0, 1)),\n                source TEXT NOT NULL DEFAULT 'practice',\n                student_name TEXT,\n                answered_at TEXT NOT NULL DEFAULT (datetime('now'))\n            )"
   },
+  "classroom_submissions": {
+    "columns": [
+      {
+        "cid": 0,
+        "dflt_value": null,
+        "name": "session_id",
+        "notnull": 1,
+        "pk": 1,
+        "type": "TEXT"
+      },
+      {
+        "cid": 1,
+        "dflt_value": null,
+        "name": "test_id",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 2,
+        "dflt_value": null,
+        "name": "title",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 3,
+        "dflt_value": null,
+        "name": "started_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 4,
+        "dflt_value": null,
+        "name": "student_name",
+        "notnull": 1,
+        "pk": 2,
+        "type": "TEXT"
+      },
+      {
+        "cid": 5,
+        "dflt_value": null,
+        "name": "set_label",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 6,
+        "dflt_value": null,
+        "name": "answers",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      },
+      {
+        "cid": 7,
+        "dflt_value": null,
+        "name": "score",
+        "notnull": 1,
+        "pk": 0,
+        "type": "INTEGER"
+      },
+      {
+        "cid": 8,
+        "dflt_value": null,
+        "name": "submitted_at",
+        "notnull": 1,
+        "pk": 0,
+        "type": "TEXT"
+      }
+    ],
+    "foreign_keys": [],
+    "sql": "CREATE TABLE classroom_submissions (\n                session_id TEXT NOT NULL,\n                test_id TEXT NOT NULL,\n                title TEXT NOT NULL,\n                started_at TEXT NOT NULL,\n                student_name TEXT NOT NULL,\n                set_label TEXT NOT NULL,\n                answers TEXT NOT NULL,\n                score INTEGER NOT NULL,\n                submitted_at TEXT NOT NULL,\n                PRIMARY KEY (session_id, student_name)\n            )"
+  },
   "generated_questions": {
     "columns": [
       {

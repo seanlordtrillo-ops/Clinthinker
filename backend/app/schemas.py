@@ -141,7 +141,20 @@ class StartClassroomRequest(BaseModel):
     test_id: str = Field(min_length=1, max_length=100)
     set_mode: Literal["A", "B", "alternate"] = "alternate"
     port: int = Field(default=8800, ge=1024, le=65000)
+    time_limit_minutes: int | None = Field(default=None, ge=1, le=180)
+    shuffle_questions: bool = True
 
 
 class EndClassroomRequest(BaseModel):
+    save: bool = True
+
+
+class ClassroomControlRequest(BaseModel):
+    locked: bool | None = None
+    add_minutes: int | None = Field(default=None, ge=1, le=60)
+    release_answers: bool = False
+
+
+class RecoverClassroomRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=100)
     save: bool = True

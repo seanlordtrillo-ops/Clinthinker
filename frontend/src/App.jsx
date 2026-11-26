@@ -100,6 +100,7 @@ export default function App() {
   const [classroomBusy, setClassroomBusy] = useState(false);
   const [classroomPollError, setClassroomPollError] = useState("");
   const [classroomCopyNotice, setClassroomCopyNotice] = useState("");
+  const [recoveredClassroomTestId, setRecoveredClassroomTestId] = useState("");
   const [testBuildBusy, setTestBuildBusy] = useState(false);
   const [testOpenBusy, setTestOpenBusy] = useState(false);
   const [testResultsBusy, setTestResultsBusy] = useState(false);
@@ -1167,7 +1168,7 @@ export default function App() {
     }
   };
 
-  const startClassroomQuiz = async (testId, setMode) => {
+  const startClassroomQuiz = async (testId, setMode, options) => {
     if (!testId) {
       setError("Choose a saved test before starting the quiz.");
       return;
@@ -1177,8 +1178,9 @@ export default function App() {
     setNotice("");
     setClassroomPollError("");
     setClassroomCopyNotice("");
+    setRecoveredClassroomTestId("");
     try {
-      const result = await api.startClassroom(testId, setMode);
+      const result = await api.startClassroom(testId, setMode, options);
       classroomStatusVersionRef.current += 1;
       setClassroomState(result);
       setClassroomEndResult(null);
@@ -1228,6 +1230,54 @@ export default function App() {
     }
   };
 
+  const controlClassroomQuiz = async (control) => {
+    setClassroomBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.controlClassroom(control);
+      classroomStatusVersionRef.current += 1;
+      setClassroomState(result);
+      setClassroomPollError("");
+    } catch (controlError) {
+      setError(controlError.message);
+    } finally {
+      setClassroomBusy(false);
+    }
+  };
+
+  const recoverClassroomQuiz = async (quiz, save) => {
+    const prompt = save
+      ? `This replaces the existing class results for ${quiz.title}. Continue?`
+      : "Throw away these answers? This can't be undone.";
+    if (!window.confirm(prompt)) return;
+    setClassroomBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.recoverClassroom(quiz.session_id, save);
+      if (save) {
+        setRecoveredClassroomTestId(result.test_id);
+        setNotice(`Saved ${result.submitted} students' answers for ${result.title || quiz.title}.`);
+      } else {
+        setRecoveredClassroomTestId("");
+        setNotice(`Discarded unsaved answers for ${quiz.title}.`);
+      }
+      classroomStatusVersionRef.current += 1;
+      try {
+        const status = await api.classroom();
+        setClassroomState(status);
+        setClassroomPollError("");
+      } catch {
+        setClassroomPollError("Lost connection to the quiz. Retrying…");
+      }
+    } catch (recoverError) {
+      setError(recoverError.message);
+    } finally {
+      setClassroomBusy(false);
+    }
+  };
+
   const copyClassroomAddress = async (address) => {
     try {
       await navigator.clipboard.writeText(address);
@@ -1249,8 +1299,11 @@ export default function App() {
     setMenuOpen(false);
   };
 
-  const openClassroomAnalysis = () => {
-    const testId = classroomEndResult?.test_id || classroomState?.test_id;
+  const openClassroomAnalysis = (requestedTestId) => {
+    const testId = (typeof requestedTestId === "string" && requestedTestId)
+      || recoveredClassroomTestId
+      || classroomEndResult?.test_id
+      || classroomState?.test_id;
     if (!testId) {
       setError("The classroom quiz test could not be identified.");
       return;
@@ -1903,6 +1956,10 @@ export default function App() {
           onEnd={endClassroomQuiz}
           onCopyAddress={copyClassroomAddress}
           onOpenAnalysis={openClassroomAnalysis}
+          recoveredTestId={recoveredClassroomTestId}
+          onControl={controlClassroomQuiz}
+          unsavedQuizzes={classroomState?.unsaved_quizzes || []}
+          onRecover={recoverClassroomQuiz}
         />}
         {page === "Item Analysis" && <ItemAnalysisPage
           tests={teacherTests}
@@ -2961,9 +3018,15 @@ function TestBuilderPage({
 
 function ClassroomQuizPage({
   tests, testsBusy, selectedTestId, onSelectTest, session, endResult, actionBusy,
-  error, pollError, notice, copyNotice, onStart, onEnd, onCopyAddress, onOpenAnalysis
+  error, pollError, notice, copyNotice, recoveredTestId, unsavedQuizzes, onStart, onEnd,
+  onCopyAddress, onOpenAnalysis, onControl, onRecover
 }) {
   const [setMode, setSetMode] = useState("alternate");
+  const [timeLimitInput, setTimeLimitInput] = useState("");
+  const [shuffleQuestions, setShuffleQuestions] = useState(true);
+  const [timeLimitError, setTimeLimitError] = useState("");
+  const [secondsRemaining, setSecondsRemaining] = useState(session?.seconds_left ?? null);
+  const [showAllItemStats, setShowAllItemStats] = useState(false);
   const selectedTest = tests.find((test) => test.id === selectedTestId);
   const hasSetB = selectedTest?.sets?.includes("B") || false;
   const running = Boolean(session?.running);
@@ -2977,10 +3040,58 @@ function ClassroomQuizPage({
   const unansweredNames = endResult?.not_submitted
     || session?.students?.filter((student) => !student.submitted).map((student) => student.name)
     || [];
+  const itemStats = session?.item_stats || [];
+  const visibleItemStats = showAllItemStats ? itemStats : itemStats.slice(0, 10);
+  const timeIsUp = Boolean(session?.time_up) || (secondsRemaining !== null && secondsRemaining <= 0);
+  const displayedSeconds = secondsRemaining ?? session?.seconds_left;
 
   useEffect(() => {
     setSetMode(hasSetB ? "alternate" : "A");
   }, [selectedTestId, hasSetB]);
+
+  useEffect(() => {
+    setSecondsRemaining(session?.seconds_left ?? null);
+  }, [session?.seconds_left, session?.running]);
+
+  useEffect(() => {
+    if (!running || secondsRemaining === null || timeIsUp) return undefined;
+    const timer = window.setInterval(() => {
+      setSecondsRemaining((current) => current === null ? null : Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [running, secondsRemaining === null, timeIsUp]);
+
+  const startQuiz = () => {
+    const timeLimitMinutes = timeLimitInput.trim() ? Number(timeLimitInput) : null;
+    if (timeLimitMinutes !== null && (!Number.isInteger(timeLimitMinutes) || timeLimitMinutes < 1 || timeLimitMinutes > 180)) {
+      setTimeLimitError("Enter a whole number from 1 to 180.");
+      return;
+    }
+    setTimeLimitError("");
+    onStart(selectedTestId, hasSetB ? setMode : "A", { timeLimitMinutes, shuffleQuestions });
+  };
+
+  const addTime = (minutes) => onControl({ addMinutes: minutes });
+  const toggleLock = () => onControl({ locked: !session.locked });
+  const releaseAnswers = () => {
+    const notSubmitted = Math.max(0, Number(session.joined || 0) - Number(session.submitted || 0));
+    const prompt = notSubmitted
+      ? `${notSubmitted} student${notSubmitted === 1 ? "" : "s"} ${notSubmitted === 1 ? "hasn't" : "haven't"} submitted. Showing the answers closes the quiz for them. Show answers anyway?`
+      : "Show each student their corrections? No one can join or submit after this.";
+    if (window.confirm(prompt)) onControl({ releaseAnswers: true });
+  };
+
+  const renderTimeLeft = () => {
+    if (session?.seconds_left === null || session?.seconds_left === undefined) {
+      return <span className="classroom-no-time-limit">No time limit</span>;
+    }
+    if (timeIsUp) return <strong className="classroom-time-up">Time is up</strong>;
+    const minutes = Math.floor(Math.max(0, displayedSeconds) / 60);
+    const seconds = Math.max(0, displayedSeconds) % 60;
+    return <strong className={`classroom-timer${displayedSeconds < 60 ? " classroom-timer-warning" : ""}`}>
+      {minutes}:{String(seconds).padStart(2, "0")} left
+    </strong>;
+  };
 
   return <section className="teacher-page classroom-page">
     <div className="training-page-heading">
@@ -2990,18 +3101,56 @@ function ClassroomQuizPage({
         <p>Run a live quiz on your local network and save submitted answers for Item Analysis.</p>
       </div>
     </div>
+    {unsavedQuizzes?.length > 0 && <section className="classroom-unsaved-panel">
+      <h2>Unsaved quiz answers found</h2>
+      <p>A quiz stopped before it was ended (the app closed or the laptop shut down). These answers were saved as students submitted them.</p>
+      <div className="classroom-unsaved-list">
+        {unsavedQuizzes.map((quiz) => <article className="classroom-unsaved-row" key={quiz.session_id}>
+          <div className="classroom-unsaved-info">
+            <strong>{quiz.title}</strong>
+            <small>{formatDate(quiz.started_at)} · {quiz.submitted} students submitted</small>
+          </div>
+          <div className="classroom-unsaved-actions">
+            <button className="button-dark" type="button" disabled={actionBusy} onClick={() => onRecover(quiz, true)}>
+              Save to Item Analysis
+            </button>
+            <button className="button-outline" type="button" disabled={actionBusy} onClick={() => onRecover(quiz, false)}>
+              Discard
+            </button>
+          </div>
+        </article>)}
+      </div>
+    </section>}
     {error && <AppErrorMessage message={error} />}
     {pollError && <AppErrorMessage message={pollError} />}
-    {notice && <div className="app-message app-message-success"><Check size={16} />{notice}</div>}
+    {notice && <div className="app-message app-message-success">
+      <Check size={16} />
+      <span>{notice}</span>
+      {recoveredTestId && <button className="button-outline" type="button" onClick={() => onOpenAnalysis(recoveredTestId)}>Open Item Analysis</button>}
+    </div>}
 
     {running && <section className="teacher-panel classroom-running-panel">
       <div className="classroom-running-heading">
         <div><h2>{session.title}</h2><p>{session.total_items} questions · {session.set_mode === "alternate" ? "Alternating sets" : `Set ${session.set_mode}`}</p></div>
-        <span className="classroom-live-badge"><i /> Quiz running</span>
+        <div className="classroom-running-tools">
+          <span className="classroom-live-badge"><i /> Quiz running</span>
+          <div className="classroom-timer-display" aria-live="polite">{renderTimeLeft()}</div>
+        </div>
       </div>
-      <div className="classroom-code-block">
-        <span>ROOM CODE</span>
-        <strong aria-label={`Room code ${session.code}`}>{session.code}</strong>
+      <div className="classroom-room-row">
+        <div className="classroom-code-block">
+          <span>ROOM CODE</span>
+          <strong aria-label={`Room code ${session.code}`}>{session.code}</strong>
+          {session.locked && <span className="classroom-locked-badge">Joining locked</span>}
+        </div>
+        {session.join_qr_svg && session.join_urls?.[0] && <div className="classroom-qr-card">
+          <img
+            className="classroom-qr"
+            src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(session.join_qr_svg)}`}
+            alt={`QR code for ${session.join_urls[0]}`}
+          />
+          <span>Scan to join</span>
+        </div>}
       </div>
       <div className="classroom-join-panel">
         <span className="classroom-section-label">Students open:</span>
@@ -3018,19 +3167,71 @@ function ClassroomQuizPage({
       <div className="classroom-counters">
         <div><span>Joined</span><strong>{session.joined}</strong></div>
         <div><span>Submitted</span><strong>{submitted} of {session.joined} submitted</strong></div>
+        <div className={session.away_now > 0 ? "classroom-away-counter" : ""}><span>Away now</span><strong>{session.away_now || 0}</strong></div>
       </div>
       <div className="classroom-students">
         <h3>Students</h3>
         <div className="teacher-table-wrap"><table className="teacher-table">
-          <thead><tr><th>Name</th><th>Set</th><th>Status</th><th>Score</th></tr></thead>
+          <thead><tr>
+            <th>Name</th><th>Set</th><th>Status</th>
+            <th title="Times the student switched apps or tabs, or locked the screen, while answering.">Left page</th>
+            <th>Score</th>
+          </tr></thead>
           <tbody>{students.length ? students.map((student) => <tr key={`${student.name}-${student.set}`}>
             <td>{student.name}</td>
             <td>{student.set}</td>
             <td>{student.submitted ? "Submitted" : "Answering…"}</td>
+            <td>{student.left_page || "—"}{student.away && <span className="classroom-away-tag">Away now</span>}</td>
             <td>{student.submitted ? `${student.score} / ${session.total_items}` : "—"}</td>
-          </tr>) : <tr><td colSpan="4">No students have joined yet.</td></tr>}</tbody>
+          </tr>) : <tr><td colSpan="5">No students have joined yet.</td></tr>}</tbody>
         </table></div>
       </div>
+      <div className="classroom-item-stats">
+        <div className="classroom-stats-heading">
+          <div><h3>How each question is going</h3><p>Numbered as in Set A. Counts students who have submitted.</p></div>
+        </div>
+        <div className="teacher-table-wrap"><table className="teacher-table classroom-stats-table">
+          <thead><tr><th>No.</th><th>Question</th><th>Topic</th><th>Correct</th></tr></thead>
+          <tbody>{visibleItemStats.length ? visibleItemStats.map((item) => {
+            const percent = item.percent_correct;
+            const progress = percent === null ? null : Math.max(0, Math.min(100, Number(percent) || 0));
+            return <tr key={item.number}>
+              <td>{item.number}</td>
+              <td className="classroom-stat-question" title={item.question}>{item.question}</td>
+              <td>{item.topic}</td>
+              <td>
+                {percent === null || percent === undefined
+                  ? "—"
+                  : <div className={`classroom-correct-stat${percent < 50 ? " classroom-correct-stat-low" : ""}`}>
+                    <span className="classroom-correct-track"><i style={{ width: `${progress}%` }} /></span>
+                    <small>{item.correct} of {item.submitted} ({percent}%)</small>
+                  </div>}
+              </td>
+            </tr>;
+          }) : <tr><td colSpan="4">Question results will appear after students submit.</td></tr>}</tbody>
+        </table></div>
+        {itemStats.length > 10 && <button className="button-outline classroom-show-all" type="button" onClick={() => setShowAllItemStats((current) => !current)}>
+          {showAllItemStats ? "Show fewer" : "Show all"}
+        </button>}
+      </div>
+      <div className="classroom-control-actions">
+        <div className="classroom-time-controls">
+          {session.seconds_left === null
+            ? <button className="button-outline" type="button" disabled={actionBusy} onClick={() => addTime(5)}>Start 5-minute timer</button>
+            : <>
+              <button className="button-outline" type="button" disabled={actionBusy} onClick={() => addTime(1)}>+1 min</button>
+              <button className="button-outline" type="button" disabled={actionBusy} onClick={() => addTime(5)}>+5 min</button>
+            </>}
+        </div>
+        {!session.answers_released && <button className="button-outline" type="button" disabled={actionBusy} onClick={toggleLock}>
+          {session.locked ? "Unlock joining" : "Lock joining"}
+        </button>}
+      </div>
+      {session.answers_released
+        ? <p className="classroom-answer-released"><Check size={15} /> Answers shown. Students who submitted can see their corrections on their phones. End the quiz when they&apos;re done.</p>
+        : <div className="classroom-actions">
+          <button className="button-outline" type="button" disabled={actionBusy} onClick={releaseAnswers}>Show answers to students</button>
+        </div>}
       <div className="classroom-actions">
         <button className="button-dark" type="button" disabled={actionBusy} onClick={() => onEnd(true)}>
           {actionBusy ? <><span className="spinner" /> Ending quiz...</> : "End quiz and save results"}
@@ -3059,6 +3260,7 @@ function ClassroomQuizPage({
         <li>Turn on your phone&apos;s or laptop&apos;s hotspot (school Wi-Fi usually blocks this).</li>
         <li>Connect this laptop and the students&apos; phones to it.</li>
         <li>The first time, Windows will ask to allow Clinthinker on the network. Choose Private networks and click Allow.</li>
+        <li>Students can scan the QR code with their phone camera instead of typing the address.</li>
       </ol>
       <label className="teacher-field">
         <span>Saved test</span>
@@ -3077,11 +3279,33 @@ function ClassroomQuizPage({
           {hasSetB && <option value="B">Set B only</option>}
         </select>
       </label>
+      <label className="teacher-field">
+        <span>Time limit (minutes)</span>
+        <input
+          type="number"
+          min="1"
+          max="180"
+          step="1"
+          value={timeLimitInput}
+          onChange={(event) => {
+            setTimeLimitInput(event.target.value);
+            setTimeLimitError("");
+          }}
+          placeholder="No time limit"
+          disabled={actionBusy}
+        />
+        <small className="classroom-field-help">Leave empty for no time limit. Phones count down and submit by themselves at zero.</small>
+        {timeLimitError && <small className="classroom-field-error">{timeLimitError}</small>}
+      </label>
+      <label className="classroom-shuffle-toggle">
+        <input type="checkbox" checked={shuffleQuestions} onChange={(event) => setShuffleQuestions(event.target.checked)} disabled={actionBusy} />
+        <span><strong>Shuffle question and option order for each student</strong><small>Questions stay grouped by type. Makes copying from a seatmate harder.</small></span>
+      </label>
       <button
         className="button-dark classroom-start-button"
         type="button"
         disabled={actionBusy || testsBusy || !selectedTest}
-        onClick={() => onStart(selectedTestId, hasSetB ? setMode : "A")}
+        onClick={startQuiz}
       >
         {actionBusy ? <><span className="spinner" /> Starting quiz...</> : "Start quiz"}
       </button>

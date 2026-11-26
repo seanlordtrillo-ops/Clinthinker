@@ -168,6 +168,8 @@ from .routers.assessments import read_analysis as read_analysis
 from .routers.classroom import read_classroom as read_classroom
 from .routers.classroom import start_classroom as start_classroom
 from .routers.classroom import end_classroom as end_classroom
+from .routers.classroom import control_classroom as control_classroom
+from .routers.classroom import recover_classroom as recover_classroom
 from .routers.questions import _question_batches as _question_batches
 from .routers.questions import _MAX_QUESTION_BATCHES as _MAX_QUESTION_BATCHES
 from .routers.questions import _QUESTION_BATCH_UNAVAILABLE_DETAIL as _QUESTION_BATCH_UNAVAILABLE_DETAIL

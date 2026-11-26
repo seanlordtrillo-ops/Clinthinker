@@ -173,10 +173,27 @@ export const api = {
   },
   testAnalysis: (id) => apiRequest(`/api/tests/${encodeURIComponent(id)}/analysis`),
   classroom: () => apiRequest("/api/classroom"),
-  startClassroom: (testId, setMode = "alternate") => apiRequest("/api/classroom/start", {
+  startClassroom: (testId, setMode = "alternate", { timeLimitMinutes = null, shuffleQuestions = true } = {}) =>
+    apiRequest("/api/classroom/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ test_id: testId, set_mode: setMode })
+    body: JSON.stringify({
+      test_id: testId,
+      set_mode: setMode,
+      time_limit_minutes: timeLimitMinutes || null,
+      shuffle_questions: shuffleQuestions
+    })
+  }),
+  controlClassroom: ({ locked = null, addMinutes = null, releaseAnswers = false } = {}) =>
+    apiRequest("/api/classroom/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locked, add_minutes: addMinutes, release_answers: releaseAnswers })
+    }),
+  recoverClassroom: (sessionId, save = true) => apiRequest("/api/classroom/recover", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, save })
   }),
   endClassroom: (save = true) => apiRequest("/api/classroom/end", {
     method: "POST",

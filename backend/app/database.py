@@ -233,6 +233,20 @@ def initialize() -> None:
                 score INTEGER NOT NULL,
                 imported_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
+            -- Classroom Quiz answers saved the moment each student submits, so a crash
+            -- or a closed laptop never loses them. Cleared when the quiz ends normally.
+            CREATE TABLE IF NOT EXISTS classroom_submissions (
+                session_id TEXT NOT NULL,
+                test_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                student_name TEXT NOT NULL,
+                set_label TEXT NOT NULL,
+                answers TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                submitted_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, student_name)
+            );
             """
         )
         upload_columns = {

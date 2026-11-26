@@ -13,7 +13,15 @@
   },
   {
     "method": "post",
+    "path": "/api/classroom/control"
+  },
+  {
+    "method": "post",
     "path": "/api/classroom/end"
+  },
+  {
+    "method": "post",
+    "path": "/api/classroom/recover"
   },
   {
     "method": "post",
